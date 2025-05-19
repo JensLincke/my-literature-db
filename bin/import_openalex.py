@@ -46,7 +46,17 @@ def find_snapshot_dirs(entity_type):
         return []
     
     # Sort by date (format: updated_date=YYYY-MM-DD)
-    return sorted(date_dirs, key=lambda d: d.name.split("=")[1])
+    def parse_date(dir_path):
+        try:
+            date_str = dir_path.name.split("=")[1]
+            # Convert to datetime for proper chronological sorting
+            return datetime.strptime(date_str, "%Y-%m-%d")
+        except (IndexError, ValueError):
+            # If date parsing fails, return a future date to sort it last
+            logger.warning(f"Invalid date format in directory: {dir_path}")
+            return datetime.max
+
+    return sorted(date_dirs, key=parse_date)
 
 def extract_short_id(openalex_id):
     """Extract short ID from OpenAlex URL or ID string"""
@@ -114,67 +124,71 @@ def process_entity_files(db, entity_type, limit=None):
         logger.info(f"Importing {entity_type} from {snapshot_dir} (date: {update_date})")
         
         # Get all part files
-        part_files = sorted(snapshot_dir.glob("part_*.gz"))
+        # Sort part files by their part number to ensure chronological order
+        part_files = sorted(snapshot_dir.glob("part_*.gz"), 
+                          key=lambda x: int(x.stem.split('_')[1]))
         if not part_files:
             logger.error(f"No part files found in {snapshot_dir}")
             continue
-    for part_file in part_files:
-        if limit and total_imported >= limit:
-            break
-            
-        logger.info(f"Processing {part_file.name}")
         
-        batch = []
-        try:
-            with gzip.open(part_file, 'rt', encoding='utf-8') as f:
-                for line in f:
-                    if limit and total_imported >= limit:
-                        break
-                    
-                    try:
-                        data = json.loads(line)
-                        
-                        # Skip entries with missing ID
-                        if not data.get("id"):
-                            continue
-                        
-                        data = process_entity(data, entity_type, update_date, part_file)
-                        batch.append(data)
-                        
-                        # Process in batches for better performance
-                        batch_size = min(1000, (limit - total_imported if limit else 1000))
-                        if len(batch) >= batch_size:
-                            try:
-                                collection.insert_many(batch, ordered=False)
-                            except PyMongoError as e:
-                                logger.warning(f"Error inserting batch: {str(e)}")
-                            
-                            total_imported += len(batch)
-                            logger.info(f"Imported {total_imported} {entity_type} records")
-                            batch = []
-                            
-                            if limit and total_imported >= limit:
-                                break
-                    
-                    except json.JSONDecodeError:
-                        logger.warning(f"Invalid JSON in {part_file.name}")
-                        continue
-                    except Exception as e:
-                        logger.error(f"Error processing record: {str(e)}")
-                        continue
+        # Process all part files in this snapshot
+        for part_file in part_files:
+            if limit and total_imported >= limit:
+                break
                 
-                # Process any remaining records in the last batch
-                if batch:
-                    try:
-                        collection.insert_many(batch, ordered=False)
-                    except PyMongoError as e:
-                        logger.warning(f"Error inserting final batch: {str(e)}")
-                    total_imported += len(batch)
-                    logger.info(f"Imported {total_imported} {entity_type} records")
-        
-        except Exception as e:
-            logger.error(f"Error processing file {part_file}: {str(e)}")
-            continue
+            logger.info(f"Processing {part_file.name}")
+            
+            batch = []
+            try:
+                with gzip.open(part_file, 'rt', encoding='utf-8') as f:
+                    for line in f:
+                        if limit and total_imported >= limit:
+                            break
+                        
+                        try:
+                            data = json.loads(line)
+                            
+                            # Skip entries with missing ID
+                            if not data.get("id"):
+                                continue
+                            
+                            data = process_entity(data, entity_type, update_date, part_file)
+                            batch.append(data)
+                            
+                            # Process in batches for better performance
+                            batch_size = min(1000, (limit - total_imported if limit else 1000))
+                            if len(batch) >= batch_size:
+                                try:
+                                    collection.insert_many(batch, ordered=False)
+                                except PyMongoError as e:
+                                    logger.warning(f"Error inserting batch: {str(e)}")
+                                
+                                total_imported += len(batch)
+                                logger.info(f"Imported {total_imported} {entity_type} records")
+                                batch = []
+                                
+                                if limit and total_imported >= limit:
+                                    break
+                        
+                        except json.JSONDecodeError:
+                            logger.warning(f"Invalid JSON in {part_file.name}")
+                            continue
+                        except Exception as e:
+                            logger.error(f"Error processing record: {str(e)}")
+                            continue
+                    
+                    # Process any remaining records in the last batch
+                    if batch:
+                        try:
+                            collection.insert_many(batch, ordered=False)
+                        except PyMongoError as e:
+                            logger.warning(f"Error inserting final batch: {str(e)}")
+                        total_imported += len(batch)
+                        logger.info(f"Imported {total_imported} {entity_type} records")
+            
+            except Exception as e:
+                logger.error(f"Error processing file {part_file}: {str(e)}")
+                continue
     
     logger.info(f"Completed importing {total_imported} {entity_type} records")
 
