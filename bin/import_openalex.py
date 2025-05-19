@@ -36,18 +36,17 @@ logger = logging.getLogger("openalex-importer")
 # Path to OpenAlex snapshot data
 OPENALEX_DATA_PATH = "/mnt/db/openalex/openalex-snapshot/data"
 
-def find_latest_snapshot(entity_type):
-    """Find the most recent snapshot folder for a given entity type"""
+def find_snapshot_dirs(entity_type):
+    """Find all snapshot folders for a given entity type, sorted by date"""
     base_path = Path(OPENALEX_DATA_PATH) / entity_type
     date_dirs = [d for d in base_path.glob("updated_date=*") if d.is_dir()]
     
     if not date_dirs:
         logger.error(f"No snapshot directories found for {entity_type}")
-        return None
+        return []
     
     # Sort by date (format: updated_date=YYYY-MM-DD)
-    latest_dir = sorted(date_dirs, key=lambda d: d.name.split("=")[1], reverse=True)[0]
-    return latest_dir
+    return sorted(date_dirs, key=lambda d: d.name.split("=")[1])
 
 def extract_short_id(openalex_id):
     """Extract short ID from OpenAlex URL or ID string"""
@@ -56,10 +55,14 @@ def extract_short_id(openalex_id):
     # Handle both URL and non-URL formats
     return openalex_id.split('/')[-1]
 
-def process_entity(data, entity_type):
+def process_entity(data, entity_type, update_date, part_file):
     """Process an entity before importing to MongoDB"""
     # Use OpenAlex short_id as MongoDB _id
     data['_id'] = extract_short_id(data.get('id'))
+    
+    # Add update information
+    data['_update_date'] = update_date
+    data['_update_part'] = str(part_file)
     
     # Process references to other entities
     if entity_type == "works":
@@ -99,19 +102,22 @@ def process_entity_files(db, entity_type, limit=None):
         collection.create_index([("level", ASCENDING)])
         collection.create_index([("works_count", ASCENDING)])
     
-    latest_dir = find_latest_snapshot(entity_type)
-    if not latest_dir:
-        return
-    
-    logger.info(f"Importing {entity_type} from {latest_dir}")
-    
-    # Get all part files
-    part_files = sorted(latest_dir.glob("part_*.gz"))
-    if not part_files:
-        logger.error(f"No part files found in {latest_dir}")
+    snapshot_dirs = find_snapshot_dirs(entity_type)
+    if not snapshot_dirs:
         return
     
     total_imported = 0
+    
+    # Process each snapshot directory in chronological order
+    for snapshot_dir in snapshot_dirs:
+        update_date = snapshot_dir.name.split("=")[1]
+        logger.info(f"Importing {entity_type} from {snapshot_dir} (date: {update_date})")
+        
+        # Get all part files
+        part_files = sorted(snapshot_dir.glob("part_*.gz"))
+        if not part_files:
+            logger.error(f"No part files found in {snapshot_dir}")
+            continue
     for part_file in part_files:
         if limit and total_imported >= limit:
             break
@@ -132,7 +138,7 @@ def process_entity_files(db, entity_type, limit=None):
                         if not data.get("id"):
                             continue
                         
-                        data = process_entity(data, entity_type)
+                        data = process_entity(data, entity_type, update_date, part_file)
                         batch.append(data)
                         
                         # Process in batches for better performance
@@ -172,28 +178,63 @@ def process_entity_files(db, entity_type, limit=None):
     
     logger.info(f"Completed importing {total_imported} {entity_type} records")
 
-def get_collection_counts(db):
-    """Get the count of documents in each collection"""
-    counts = {}
+def get_collection_stats(db):
+    """Get statistics about each collection"""
+    stats = {}
     for collection_name in ENTITY_TYPES:
-        counts[collection_name] = db[collection_name].count_documents({})
-    return counts
+        collection = db[collection_name]
+        try:
+            # Get document count
+            count = collection.count_documents({})
+            # Get the latest update date
+            latest_doc = collection.find_one(
+                {"_update_date": {"$exists": True}},
+                sort=[("_update_date", -1)]
+            )
+            latest_date = latest_doc.get("_update_date") if latest_doc else None
+            
+            stats[collection_name] = {
+                "count": count,
+                "latest_update": latest_date
+            }
+        except (KeyError, AttributeError) as e:
+            # Handle specific errors related to missing fields or invalid data
+            logger.warning(f"Data error getting stats for {collection_name}: {str(e)}")
+            stats[collection_name] = {
+                "count": count if 'count' in locals() else 0,
+                "latest_update": None,
+                "error": f"Data error: {str(e)}"
+            }
+        except Exception as e:
+            # Handle other unexpected errors
+            logger.error(f"Unexpected error getting stats for {collection_name}: {str(e)}")
+            stats[collection_name] = {
+                "count": count if 'count' in locals() else 0,
+                "latest_update": None,
+                "error": f"Unexpected error: {str(e)}"
+            }
+    return stats
 
-def confirm_wipe(mongo_uri):
+def print_database_status(db):
+    """Print current database status"""
+    stats = get_collection_stats(db)
+    
+    print("\nDatabase contents:")
+    print("-------------------------")
+    total = 0
+    for entity, entity_stats in stats.items():
+        count = entity_stats["count"]
+        latest_update = entity_stats["latest_update"] or "No data"
+        print(f"{entity.title()}: {count:,} documents (Latest update: {latest_update})")
+        total += count
+    print(f"\nTotal: {total:,} documents")
+    print("-------------------------")
+    return stats
+
+def confirm_wipe(db):
     """Ask for confirmation before wiping the database"""
     try:
-        client = MongoClient(mongo_uri)
-        db = client.openalex
-        counts = get_collection_counts(db)
-        
-        print("\nCurrent database contents:")
-        print("-------------------------")
-        total = 0
-        for entity, count in counts.items():
-            print(f"{entity.title()}: {count:,} documents")
-            total += count
-        print(f"\nTotal: {total:,} documents")
-        print("-------------------------")
+        print_database_status(db)
         
         response = input("\nAre you sure you want to wipe the database? This action cannot be undone. [y/N] ").lower()
         return response in ['y', 'yes']
@@ -211,15 +252,9 @@ def main():
                        help="MongoDB connection URI")
     parser.add_argument("--wipe", action="store_true",
                        help="Wipe the existing database before importing")
+    parser.add_argument("--status", action="store_true",
+                       help="Show current database status")
     args = parser.parse_args()
-    
-    start_time = datetime.now()
-    logger.info(f"Starting OpenAlex import at {start_time}")
-    
-    # Check if data directory exists
-    if not os.path.isdir(OPENALEX_DATA_PATH):
-        logger.error(f"OpenAlex data directory not found at {OPENALEX_DATA_PATH}")
-        sys.exit(1)
     
     try:
         # Connect to MongoDB
@@ -227,9 +262,23 @@ def main():
         db = client.openalex
         logger.info("Connected to MongoDB")
         
+        # If --status flag is set, just show status and exit
+        if args.status:
+            print_database_status(db)
+            client.close()
+            return
+        
+        start_time = datetime.now()
+        logger.info(f"Starting OpenAlex import at {start_time}")
+        
+        # Check if data directory exists
+        if not os.path.isdir(OPENALEX_DATA_PATH):
+            logger.error(f"OpenAlex data directory not found at {OPENALEX_DATA_PATH}")
+            sys.exit(1)
+            
         # Wipe database if requested and confirmed
         if args.wipe:
-            if confirm_wipe(args.mongo_uri):
+            if confirm_wipe(db):
                 logger.info("Wiping existing database...")
                 client.drop_database('openalex')
                 db = client.openalex
@@ -254,15 +303,15 @@ def main():
             }
         })
         
+        end_time = datetime.now()
+        duration = end_time - start_time
+        logger.info(f"Import completed in {duration}")
+        
     except PyMongoError as e:
         logger.error(f"MongoDB error: {str(e)}")
         sys.exit(1)
     finally:
         client.close()
-    
-    end_time = datetime.now()
-    duration = end_time - start_time
-    logger.info(f"Import completed in {duration}")
 
 if __name__ == "__main__":
     main()
