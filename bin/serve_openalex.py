@@ -150,27 +150,27 @@ async def list_works(
 @app.get("/works/{work_id}")
 async def get_work(work_id: str):
     """Get details of a specific work"""
-    # Try to find work by short_id first, then by full id
-    work = await db.works.find_one({"short_id": work_id})
+    # Try to find work by _id (OpenAlex short_id) first, then by full id
+    work = await db.works.find_one({"_id": work_id})
     if not work:
-        # If not found by short_id, try full id
+        # If not found by _id, try full id
         work = await db.works.find_one({"id": work_id})
         if not work:
             raise HTTPException(status_code=404, detail="Work not found")
     
     # Get author details if available
-    if work.get("author_ids"):
+    if work.get("_author_ids"):
         authors = await db.authors.find(
-            {"id": {"$in": work["author_ids"]}},
-            {"id": 1, "display_name": 1}
+            {"id": {"$in": work["_author_ids"]}},
+            {"_id": 0, "id": 1, "display_name": 1}
         ).to_list(length=None)
         work["authors"] = authors
     
     # Get concept details if available
-    if work.get("concept_ids"):
+    if work.get("_concept_ids"):
         concepts = await db.concepts.find(
-            {"id": {"$in": work["concept_ids"]}},
-            {"id": 1, "display_name": 1, "level": 1}
+            {"id": {"$in": work["_concept_ids"]}},
+            {"_id": 0, "id": 1, "display_name": 1, "level": 1}
         ).to_list(length=None)
         work["concepts"] = concepts
     
@@ -213,10 +213,10 @@ async def list_authors(
 @app.get("/authors/{author_id}")
 async def get_author(author_id: str):
     """Get details of a specific author"""
-    # Try to find author by short_id first, then by full id
-    author = await db.authors.find_one({"short_id": author_id})
+    # Try to find author by _id first, then by full id
+    author = await db.authors.find_one({"_id": author_id})
     if not author:
-        # If not found by short_id, try full id
+        # If not found by _id, try full id
         author = await db.authors.find_one({"id": author_id})
         if not author:
             raise HTTPException(status_code=404, detail="Author not found")
@@ -269,10 +269,10 @@ async def list_concepts(
 @app.get("/concepts/{concept_id}")
 async def get_concept(concept_id: str):
     """Get details of a specific concept"""
-    # Try to find concept by short_id first, then by full id
-    concept = await db.concepts.find_one({"short_id": concept_id})
+    # Try to find concept by _id (OpenAlex short_id) first, then by full id
+    concept = await db.concepts.find_one({"_id": concept_id})
     if not concept:
-        # If not found by short_id, try full id
+        # If not found by _id, try full id
         concept = await db.concepts.find_one({"id": concept_id})
         if not concept:
             raise HTTPException(status_code=404, detail="Concept not found")

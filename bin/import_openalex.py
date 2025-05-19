@@ -58,16 +58,16 @@ def extract_short_id(openalex_id):
 
 def process_entity(data, entity_type):
     """Process an entity before importing to MongoDB"""
-    # Add short_id field
-    data['short_id'] = extract_short_id(data.get('id'))
+    # Use OpenAlex short_id as MongoDB _id
+    data['_id'] = extract_short_id(data.get('id'))
     
     # Process references to other entities
     if entity_type == "works":
         # Process author IDs
-        data["author_ids"] = [extract_short_id(a.get("author", {}).get("id")) 
+        data["_author_ids"] = [extract_short_id(a.get("author", {}).get("id")) 
                              for a in data.get("authorships", [])]
         # Process concept IDs
-        data["concept_ids"] = [extract_short_id(c.get("id")) 
+        data["_concept_ids"] = [extract_short_id(c.get("id")) 
                              for c in data.get("concepts", [])]
     
     return data
@@ -80,7 +80,6 @@ def process_entity_files(db, entity_type, limit=None):
     collection = db[entity_type]
     
     # Create indexes for common queries
-    collection.create_index([("short_id", ASCENDING)], unique=True)
     collection.create_index([("id", ASCENDING)], unique=True)
     
     if entity_type == "works":
@@ -89,8 +88,8 @@ def process_entity_files(db, entity_type, limit=None):
         collection.create_index([("cited_by_count", ASCENDING)])
         collection.create_index([("type", ASCENDING)])
         collection.create_index([("abstract", ASCENDING)])
-        collection.create_index([("author_ids", ASCENDING)])
-        collection.create_index([("concept_ids", ASCENDING)])
+        collection.create_index([("_author_ids", ASCENDING)])
+        collection.create_index([("_concept_ids", ASCENDING)])
     elif entity_type == "authors":
         collection.create_index([("display_name", ASCENDING)])
         collection.create_index([("cited_by_count", ASCENDING)])
