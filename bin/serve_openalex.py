@@ -6,7 +6,7 @@ This script creates a FastAPI server to query the local OpenAlex MongoDB databas
 It provides endpoints to search and retrieve works, authors, and concepts.
 
 Usage:
-    uvicorn serve_openalex_mongo:app [--host HOST] [--port PORT] [--reload]
+    uvicorn serve_openalex:app [--host HOST] [--port PORT] [--reload]
 
 Requirements:
     pip install fastapi uvicorn motor

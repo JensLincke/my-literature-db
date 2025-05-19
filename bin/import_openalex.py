@@ -6,7 +6,7 @@ This script imports selected data from a local OpenAlex snapshot into MongoDB.
 It expects the OpenAlex snapshot to be available at the path defined in OPENALEX_DATA_PATH.
 
 Usage:
-    python import_openalex_mongo.py [--limit LIMIT] [--mongo-uri MONGO_URI]
+    python import_openalex.py [--limit LIMIT] [--mongo-uri MONGO_URI]
 
 Options:
     --limit LIMIT           Limit the number of entries per entity to import (for testing)
