@@ -15,17 +15,38 @@ Requirements:
 import os
 from typing import List, Optional
 from datetime import datetime
+import json
 
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
 from pymongo import DESCENDING
 from bson import ObjectId
-import json
 
 # MongoDB connection settings
 MONGO_URI = os.getenv("MONGO_URI", "mongodb://localhost:27017")
 MAX_RESULTS_PER_PAGE = 100
+
+class MongoJSONEncoder(json.JSONEncoder):
+    """Custom JSON encoder for MongoDB types"""
+    def default(self, obj):
+        if isinstance(obj, ObjectId):
+            return str(obj)
+        if isinstance(obj, datetime):
+            return obj.isoformat()
+        return json.JSONEncoder.default(self, obj)
+
+def jsonable_encoder(obj):
+    """Convert MongoDB documents to JSON-serializable objects"""
+    if isinstance(obj, dict):
+        return {key: jsonable_encoder(value) for key, value in obj.items()}
+    elif isinstance(obj, list):
+        return [jsonable_encoder(item) for item in obj]
+    elif isinstance(obj, ObjectId):
+        return str(obj)
+    elif isinstance(obj, datetime):
+        return obj.isoformat()
+    return obj
 
 # Create FastAPI app
 app = FastAPI(
@@ -42,6 +63,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Override FastAPI's default JSON encoder
+app.json_encoder = MongoJSONEncoder
 
 # MongoDB client
 client = None
@@ -109,6 +133,9 @@ async def list_works(
     # Get paginated results
     results = await cursor.skip(skip).limit(per_page).to_list(per_page)
     
+    # Convert MongoDB documents to JSON-serializable objects
+    results = jsonable_encoder(results)
+    
     return {
         "meta": {
             "count": len(results),
@@ -123,9 +150,13 @@ async def list_works(
 @app.get("/works/{work_id}")
 async def get_work(work_id: str):
     """Get details of a specific work"""
-    work = await db.works.find_one({"id": work_id})
+    # Try to find work by short_id first, then by full id
+    work = await db.works.find_one({"short_id": work_id})
     if not work:
-        raise HTTPException(status_code=404, detail="Work not found")
+        # If not found by short_id, try full id
+        work = await db.works.find_one({"id": work_id})
+        if not work:
+            raise HTTPException(status_code=404, detail="Work not found")
     
     # Get author details if available
     if work.get("author_ids"):
@@ -143,7 +174,8 @@ async def get_work(work_id: str):
         ).to_list(length=None)
         work["concepts"] = concepts
     
-    return work
+    # Convert MongoDB document to JSON-serializable object
+    return jsonable_encoder(work)
 
 @app.get("/authors")
 async def list_authors(
@@ -181,9 +213,13 @@ async def list_authors(
 @app.get("/authors/{author_id}")
 async def get_author(author_id: str):
     """Get details of a specific author"""
-    author = await db.authors.find_one({"id": author_id})
+    # Try to find author by short_id first, then by full id
+    author = await db.authors.find_one({"short_id": author_id})
     if not author:
-        raise HTTPException(status_code=404, detail="Author not found")
+        # If not found by short_id, try full id
+        author = await db.authors.find_one({"id": author_id})
+        if not author:
+            raise HTTPException(status_code=404, detail="Author not found")
     
     # Get author's top works
     works = await db.works.find(
@@ -192,7 +228,7 @@ async def get_author(author_id: str):
     ).sort("cited_by_count", DESCENDING).limit(100).to_list(length=None)
     
     author["works"] = works
-    return author
+    return jsonable_encoder(author)
 
 @app.get("/concepts")
 async def list_concepts(
@@ -233,9 +269,13 @@ async def list_concepts(
 @app.get("/concepts/{concept_id}")
 async def get_concept(concept_id: str):
     """Get details of a specific concept"""
-    concept = await db.concepts.find_one({"id": concept_id})
+    # Try to find concept by short_id first, then by full id
+    concept = await db.concepts.find_one({"short_id": concept_id})
     if not concept:
-        raise HTTPException(status_code=404, detail="Concept not found")
+        # If not found by short_id, try full id
+        concept = await db.concepts.find_one({"id": concept_id})
+        if not concept:
+            raise HTTPException(status_code=404, detail="Concept not found")
     
     # Get concept's top works
     works = await db.works.find(
@@ -244,7 +284,7 @@ async def get_concept(concept_id: str):
     ).sort("cited_by_count", DESCENDING).limit(100).to_list(length=None)
     
     concept["works"] = works
-    return concept
+    return jsonable_encoder(concept)
 
 @app.get("/search")
 async def search(
@@ -303,6 +343,9 @@ async def search(
         key=lambda x: x.get("cited_by_count", 0) if "cited_by_count" in x else x.get("works_count", 0),
         reverse=True
     )
+    
+    # Convert MongoDB documents to JSON-serializable objects
+    all_results = jsonable_encoder(all_results)
     
     return {
         "meta": {

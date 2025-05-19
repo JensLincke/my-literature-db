@@ -36,9 +36,6 @@ logger = logging.getLogger("openalex-importer")
 # Path to OpenAlex snapshot data
 OPENALEX_DATA_PATH = "/mnt/db/openalex/openalex-snapshot/data"
 
-# Entity types to import
-ENTITY_TYPES = ["works", "authors", "concepts"]
-
 def find_latest_snapshot(entity_type):
     """Find the most recent snapshot folder for a given entity type"""
     base_path = Path(OPENALEX_DATA_PATH) / entity_type
@@ -52,11 +49,40 @@ def find_latest_snapshot(entity_type):
     latest_dir = sorted(date_dirs, key=lambda d: d.name.split("=")[1], reverse=True)[0]
     return latest_dir
 
+def extract_short_id(openalex_id):
+    """Extract short ID from OpenAlex URL or ID string"""
+    if not openalex_id:
+        return None
+    # Handle both URL and non-URL formats
+    return openalex_id.split('/')[-1]
+
+def process_entity(data, entity_type):
+    """Process an entity before importing to MongoDB"""
+    # Add short_id field
+    data['short_id'] = extract_short_id(data.get('id'))
+    
+    # Process references to other entities
+    if entity_type == "works":
+        # Process author IDs
+        data["author_ids"] = [extract_short_id(a.get("author", {}).get("id")) 
+                             for a in data.get("authorships", [])]
+        # Process concept IDs
+        data["concept_ids"] = [extract_short_id(c.get("id")) 
+                             for c in data.get("concepts", [])]
+    
+    return data
+
+# Entity types to import
+ENTITY_TYPES = ["works", "authors", "concepts"]
+
 def process_entity_files(db, entity_type, limit=None):
     """Process all files for a given entity type"""
     collection = db[entity_type]
     
     # Create indexes for common queries
+    collection.create_index([("short_id", ASCENDING)], unique=True)
+    collection.create_index([("id", ASCENDING)], unique=True)
+    
     if entity_type == "works":
         collection.create_index([("title", ASCENDING)])
         collection.create_index([("publication_year", ASCENDING)])
@@ -88,58 +114,94 @@ def process_entity_files(db, entity_type, limit=None):
     
     total_imported = 0
     for part_file in part_files:
+        if limit and total_imported >= limit:
+            break
+            
         logger.info(f"Processing {part_file.name}")
         
         batch = []
-        with gzip.open(part_file, 'rt', encoding='utf-8') as f:
-            for line in f:
-                if limit and total_imported >= limit:
-                    break
-                
-                try:
-                    data = json.loads(line)
+        try:
+            with gzip.open(part_file, 'rt', encoding='utf-8') as f:
+                for line in f:
+                    if limit and total_imported >= limit:
+                        break
                     
-                    # Skip entries with missing ID
-                    if not data.get("id"):
+                    try:
+                        data = json.loads(line)
+                        
+                        # Skip entries with missing ID
+                        if not data.get("id"):
+                            continue
+                        
+                        data = process_entity(data, entity_type)
+                        batch.append(data)
+                        
+                        # Process in batches for better performance
+                        batch_size = min(1000, (limit - total_imported if limit else 1000))
+                        if len(batch) >= batch_size:
+                            try:
+                                collection.insert_many(batch, ordered=False)
+                            except PyMongoError as e:
+                                logger.warning(f"Error inserting batch: {str(e)}")
+                            
+                            total_imported += len(batch)
+                            logger.info(f"Imported {total_imported} {entity_type} records")
+                            batch = []
+                            
+                            if limit and total_imported >= limit:
+                                break
+                    
+                    except json.JSONDecodeError:
+                        logger.warning(f"Invalid JSON in {part_file.name}")
                         continue
-                    
-                    # Process author and concept IDs for works
-                    if entity_type == "works":
-                        data["author_ids"] = [a.get("author", {}).get("id") 
-                                            for a in data.get("authorships", [])]
-                        data["concept_ids"] = [c.get("id") 
-                                             for c in data.get("concepts", [])]
-                    
-                    batch.append(data)
-                    
-                    # Process in batches for better performance
-                    if len(batch) >= 1000:
-                        try:
-                            collection.insert_many(batch, ordered=False)
-                        except PyMongoError as e:
-                            logger.warning(f"Error inserting batch: {str(e)}")
-                        
-                        total_imported += len(batch)
-                        logger.info(f"Imported {total_imported} {entity_type} records")
-                        batch = []
-                        
-                except json.JSONDecodeError:
-                    logger.warning(f"Invalid JSON in {part_file.name}")
-                    continue
-                except Exception as e:
-                    logger.error(f"Error processing record: {str(e)}")
-                    continue
-            
-            # Process any remaining records in the last batch
-            if batch:
-                try:
-                    collection.insert_many(batch, ordered=False)
-                except PyMongoError as e:
-                    logger.warning(f"Error inserting final batch: {str(e)}")
-                total_imported += len(batch)
-                logger.info(f"Imported {total_imported} {entity_type} records")
+                    except Exception as e:
+                        logger.error(f"Error processing record: {str(e)}")
+                        continue
+                
+                # Process any remaining records in the last batch
+                if batch:
+                    try:
+                        collection.insert_many(batch, ordered=False)
+                    except PyMongoError as e:
+                        logger.warning(f"Error inserting final batch: {str(e)}")
+                    total_imported += len(batch)
+                    logger.info(f"Imported {total_imported} {entity_type} records")
+        
+        except Exception as e:
+            logger.error(f"Error processing file {part_file}: {str(e)}")
+            continue
     
     logger.info(f"Completed importing {total_imported} {entity_type} records")
+
+def get_collection_counts(db):
+    """Get the count of documents in each collection"""
+    counts = {}
+    for collection_name in ENTITY_TYPES:
+        counts[collection_name] = db[collection_name].count_documents({})
+    return counts
+
+def confirm_wipe(mongo_uri):
+    """Ask for confirmation before wiping the database"""
+    try:
+        client = MongoClient(mongo_uri)
+        db = client.openalex
+        counts = get_collection_counts(db)
+        
+        print("\nCurrent database contents:")
+        print("-------------------------")
+        total = 0
+        for entity, count in counts.items():
+            print(f"{entity.title()}: {count:,} documents")
+            total += count
+        print(f"\nTotal: {total:,} documents")
+        print("-------------------------")
+        
+        response = input("\nAre you sure you want to wipe the database? This action cannot be undone. [y/N] ").lower()
+        return response in ['y', 'yes']
+    except Exception as e:
+        logger.error(f"Error checking database contents: {e}")
+        response = input("\nCouldn't get current database stats. Still want to wipe the database? [y/N] ").lower()
+        return response in ['y', 'yes']
 
 def main():
     parser = argparse.ArgumentParser(description="Import OpenAlex data into MongoDB")
@@ -148,6 +210,8 @@ def main():
     parser.add_argument("--mongo-uri", type=str, 
                        default="mongodb://localhost:27017",
                        help="MongoDB connection URI")
+    parser.add_argument("--wipe", action="store_true",
+                       help="Wipe the existing database before importing")
     args = parser.parse_args()
     
     start_time = datetime.now()
@@ -163,6 +227,19 @@ def main():
         client = MongoClient(args.mongo_uri)
         db = client.openalex
         logger.info("Connected to MongoDB")
+        
+        # Wipe database if requested and confirmed
+        if args.wipe:
+            if confirm_wipe(args.mongo_uri):
+                logger.info("Wiping existing database...")
+                client.drop_database('openalex')
+                db = client.openalex
+                logger.info("Database wiped")
+            else:
+                logger.info("Database wipe cancelled")
+                if input("Do you want to continue with the import? [y/N] ").lower() not in ['y', 'yes']:
+                    logger.info("Import cancelled")
+                    sys.exit(0)
         
         # Process each entity type
         for entity_type in ENTITY_TYPES:
