@@ -115,9 +115,10 @@ async def list_works(
     sort_by: str = Query("_id", description="Field to sort by"),
     sort_order: str = Query("asc", description="Sort order (asc or desc)"),
     include_count: bool = Query(False, description="Whether to include total count (may be slow for large datasets)"),
-    per_page: int = Query(25, gt=0, le=MAX_RESULTS_PER_PAGE)
+    per_page: int = Query(25, gt=0, le=MAX_RESULTS_PER_PAGE),
+    group_by: Optional[str] = Query(None, description="Field to group results by")
 ):
-    """List and search works"""
+    """List and search works with optional grouping"""
     # Build query
     query = {}
     if title:
@@ -126,6 +127,11 @@ async def list_works(
         query["publication_year"] = year
     if type:
         query["type"] = type
+
+    # Validate group_by parameter if provided
+    allowed_group_fields = ["publication_year", "type", "language", "is_retracted", "has_fulltext"]
+    if group_by and group_by not in allowed_group_fields:
+        raise HTTPException(status_code=400, detail=f"Invalid group_by field. Allowed fields: {allowed_group_fields}")
     
     # Validate and process sort parameters
     allowed_sort_fields = ["_id", "publication_year", "cited_by_count", "title"]
@@ -133,14 +139,12 @@ async def list_works(
         raise HTTPException(status_code=400, detail=f"Invalid sort field. Allowed fields: {allowed_sort_fields}")
     
     sort_direction = DESCENDING if sort_order.lower() == "desc" else 1
-    
+
     # Add cursor condition if provided
     if cursor:
         try:
-            # Cursor is now base64(field:value)
             decoded = base64.b64decode(cursor.encode()).decode()
             field, value = decoded.split(":", 1)
-            # Convert value to correct type based on field
             if field == "_id":
                 pass  # Keep as string
             elif field == "publication_year":
@@ -148,7 +152,6 @@ async def list_works(
             elif field == "cited_by_count":
                 value = int(value)
             
-            # Add to query based on sort direction
             op = "$lt" if sort_direction == DESCENDING else "$gt"
             query[field] = {op: value}
         except:
@@ -158,61 +161,102 @@ async def list_works(
     pipeline = []
     pipeline.append({"$match": query})
 
-    # If count is requested, use facet to get it in parallel
-    if include_count:
-        pipeline.append({
-            "$facet": {
-                "totalCount": [{"$count": "count"}],
-                "results": [
-                    {"$sort": {sort_by: sort_direction}},
-                    {"$limit": per_page + 1}
-                ]
-            }
-        })
-        result = await db.works.aggregate(pipeline).to_list(1)
-        result = result[0]
+    if group_by:
+        # If grouping, use a simpler pipeline for distinct values first
+        distinct_pipeline = [
+            {"$match": query},
+            {"$group": {"_id": f"${group_by}"}},
+            {"$sort": {"_id": DESCENDING}},
+            {"$limit": per_page}
+        ]
         
-        total_count = result["totalCount"][0]["count"] if result["totalCount"] else 0
-        results = result["results"]
+        # Get distinct values first
+        # Get counts with a single pipeline
+        count_pipeline = [
+            {"$match": query},
+            {
+                "$group": {
+                    "_id": f"${group_by}",
+                    "count": {"$sum": 1}
+                }
+            },
+            {"$sort": {"count": DESCENDING}},
+            {"$limit": per_page}
+        ]
+        # Force index usage via hint option
+        count_results = await db.works.aggregate(
+            count_pipeline,
+            hint={"publication_year": 1} if group_by == "publication_year" else None
+        ).to_list(None)
+        
+        response = {
+            "meta": {
+                "count": len(count_results),
+                "per_page": per_page,
+                "group_by": group_by
+            },
+            "group_by": [{
+                "key": str(group["_id"]) if group["_id"] is not None else None,
+                "count": group["count"]
+            } for group in count_results]
+        }
+        
+        return jsonable_encoder(response)
     else:
-        # If count not needed, just get the results
-        pipeline.extend([
-            {"$sort": {sort_by: sort_direction}},
-            {"$limit": per_page + 1}
-        ])
-        results = await db.works.aggregate(pipeline).to_list(None)
+        # If not grouping, use original logic
+        if include_count:
+            pipeline.append({
+                "$facet": {
+                    "totalCount": [{"$count": "count"}],
+                    "results": [
+                        {"$sort": {sort_by: sort_direction}},
+                        {"$limit": per_page + 1}
+                    ]
+                }
+            })
+            result = await db.works.aggregate(pipeline).to_list(1)
+            result = result[0]
+            
+            total_count = result["totalCount"][0]["count"] if result["totalCount"] else 0
+            results = result["results"]
+        else:
+            pipeline.extend([
+                {"$sort": {sort_by: sort_direction}},
+                {"$limit": per_page + 1}
+            ])
+            results = await db.works.aggregate(pipeline).to_list(None)
 
-    # Check if there are more results
-    has_more = len(results) > per_page
-    if has_more:
-        results = results[:-1]  # Remove the extra item
+        # Check if there are more results
+        has_more = len(results) > per_page
+        if has_more:
+            results = results[:-1]  # Remove the extra item
 
-    # Create next cursor if there are more results
-    next_cursor = None
-    if has_more and results:
-        last_doc = results[-1]
-        cursor_value = str(last_doc.get(sort_by))
-        next_cursor = base64.b64encode(f"{sort_by}:{cursor_value}".encode()).decode()
+        # Create next cursor if there are more results
+        next_cursor = None
+        if has_more and results:
+            last_doc = results[-1]
+            cursor_value = str(last_doc.get(sort_by))
+            next_cursor = base64.b64encode(f"{sort_by}:{cursor_value}".encode()).decode()
 
-    # Convert MongoDB documents to JSON-serializable objects
-    results = jsonable_encoder(results)
-    
-    response = {
-        "meta": {
-            "count": len(results),
-            "per_page": per_page,
-            "has_more": has_more,
-            "next_cursor": next_cursor,
-            "sort_by": sort_by,
-            "sort_order": sort_order
-        },
-        "results": results
-    }
+        # Convert MongoDB documents to JSON-serializable objects
+        results = jsonable_encoder(results)
+        
+        response = {
+            "meta": {
+                "count": len(results),
+                "per_page": per_page,
+                "has_more": has_more,
+                "next_cursor": next_cursor,
+                "sort_by": sort_by,
+                "sort_order": sort_order
+            },
+            "results": results
+        }
 
-    if include_count:
-        response["meta"]["total_count"] = total_count
+        if include_count:
+            response["meta"]["total_count"] = total_count
 
-    return response
+        return response
 
 @app.get("/works/{work_id}")
 async def get_work(work_id: str):
