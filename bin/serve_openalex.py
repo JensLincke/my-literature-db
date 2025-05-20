@@ -16,6 +16,7 @@ import os
 from typing import List, Optional
 from datetime import datetime
 import json
+import base64
 
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
@@ -110,7 +111,10 @@ async def list_works(
     title: Optional[str] = None,
     year: Optional[int] = None,
     type: Optional[str] = None,
-    page: int = Query(1, gt=0),
+    cursor: Optional[str] = None,
+    sort_by: str = Query("_id", description="Field to sort by"),
+    sort_order: str = Query("asc", description="Sort order (asc or desc)"),
+    include_count: bool = Query(False, description="Whether to include total count (may be slow for large datasets)"),
     per_page: int = Query(25, gt=0, le=MAX_RESULTS_PER_PAGE)
 ):
     """List and search works"""
@@ -123,29 +127,92 @@ async def list_works(
     if type:
         query["type"] = type
     
-    # Execute query with pagination
-    skip = (page - 1) * per_page
-    cursor = db.works.find(query).sort("cited_by_count", DESCENDING)
+    # Validate and process sort parameters
+    allowed_sort_fields = ["_id", "publication_year", "cited_by_count", "title"]
+    if sort_by not in allowed_sort_fields:
+        raise HTTPException(status_code=400, detail=f"Invalid sort field. Allowed fields: {allowed_sort_fields}")
     
-    # Get total count
-    total_count = await db.works.count_documents(query)
+    sort_direction = DESCENDING if sort_order.lower() == "desc" else 1
     
-    # Get paginated results
-    results = await cursor.skip(skip).limit(per_page).to_list(per_page)
-    
+    # Add cursor condition if provided
+    if cursor:
+        try:
+            # Cursor is now base64(field:value)
+            decoded = base64.b64decode(cursor.encode()).decode()
+            field, value = decoded.split(":", 1)
+            # Convert value to correct type based on field
+            if field == "_id":
+                pass  # Keep as string
+            elif field == "publication_year":
+                value = int(value)
+            elif field == "cited_by_count":
+                value = int(value)
+            
+            # Add to query based on sort direction
+            op = "$lt" if sort_direction == DESCENDING else "$gt"
+            query[field] = {op: value}
+        except:
+            raise HTTPException(status_code=400, detail="Invalid cursor")
+
+    # Build pipeline
+    pipeline = []
+    pipeline.append({"$match": query})
+
+    # If count is requested, use facet to get it in parallel
+    if include_count:
+        pipeline.append({
+            "$facet": {
+                "totalCount": [{"$count": "count"}],
+                "results": [
+                    {"$sort": {sort_by: sort_direction}},
+                    {"$limit": per_page + 1}
+                ]
+            }
+        })
+        result = await db.works.aggregate(pipeline).to_list(1)
+        result = result[0]
+        
+        total_count = result["totalCount"][0]["count"] if result["totalCount"] else 0
+        results = result["results"]
+    else:
+        # If count not needed, just get the results
+        pipeline.extend([
+            {"$sort": {sort_by: sort_direction}},
+            {"$limit": per_page + 1}
+        ])
+        results = await db.works.aggregate(pipeline).to_list(None)
+
+    # Check if there are more results
+    has_more = len(results) > per_page
+    if has_more:
+        results = results[:-1]  # Remove the extra item
+
+    # Create next cursor if there are more results
+    next_cursor = None
+    if has_more and results:
+        last_doc = results[-1]
+        cursor_value = str(last_doc.get(sort_by))
+        next_cursor = base64.b64encode(f"{sort_by}:{cursor_value}".encode()).decode()
+
     # Convert MongoDB documents to JSON-serializable objects
     results = jsonable_encoder(results)
     
-    return {
+    response = {
         "meta": {
             "count": len(results),
-            "total_count": total_count,
-            "page": page,
             "per_page": per_page,
-            "total_pages": (total_count + per_page - 1) // per_page
+            "has_more": has_more,
+            "next_cursor": next_cursor,
+            "sort_by": sort_by,
+            "sort_order": sort_order
         },
         "results": results
     }
+
+    if include_count:
+        response["meta"]["total_count"] = total_count
+
+    return response
 
 @app.get("/works/{work_id}")
 async def get_work(work_id: str):
