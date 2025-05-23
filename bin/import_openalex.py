@@ -22,7 +22,7 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-from pymongo import MongoClient, ASCENDING
+from pymongo import MongoClient, ASCENDING, UpdateOne
 from pymongo.errors import PyMongoError
 
 # Configure logging
@@ -67,8 +67,22 @@ def extract_short_id(openalex_id):
 
 def process_entity(data, entity_type, update_date, part_file):
     """Process an entity before importing to MongoDB"""
+    if not isinstance(data, dict):
+        logger.warning(f"Skipping invalid data type: {type(data)} (expected dict)")
+        return None
+        
+    # Check for required ID
+    if 'id' not in data:
+        logger.warning("Skipping record missing required 'id' field")
+        return None
+    
     # Use OpenAlex short_id as MongoDB _id
-    data['_id'] = extract_short_id(data.get('id'))
+    short_id = extract_short_id(data.get('id'))
+    if not short_id:
+        logger.warning(f"Could not extract valid ID from: {data.get('id')}")
+        return None
+        
+    data['_id'] = short_id
     
     # Add update information
     data['_update_date'] = update_date
@@ -76,45 +90,160 @@ def process_entity(data, entity_type, update_date, part_file):
     
     # Process references to other entities
     if entity_type == "works":
-        # Process author IDs
-        data["_author_ids"] = [extract_short_id(a.get("author", {}).get("id")) 
-                             for a in data.get("authorships", [])]
-        # Process concept IDs
-        data["_concept_ids"] = [extract_short_id(c.get("id")) 
-                             for c in data.get("concepts", [])]
-    
+        # Process author IDs safely
+        authorships = data.get("authorships", [])
+        if isinstance(authorships, list):
+            data["_author_ids"] = [
+                author_id for a in authorships 
+                if isinstance(a, dict)
+                for author_id in [extract_short_id(a.get("author", {}).get("id"))]
+                if author_id
+            ]
+            
+        # Process concept IDs safely
+        concepts = data.get("concepts", [])
+        if isinstance(concepts, list):
+            data["_concept_ids"] = [
+                concept_id for c in concepts
+                if isinstance(c, dict)
+                for concept_id in [extract_short_id(c.get("id"))]
+                if concept_id
+            ]
+            
+        # Process institution IDs safely
+        institutions = []
+        if isinstance(authorships, list):
+            for authorship in authorships:
+                if isinstance(authorship, dict):
+                    affiliations = authorship.get("institutions", [])
+                    if isinstance(affiliations, list):
+                        for affiliation in affiliations:
+                            if isinstance(affiliation, dict):
+                                inst_id = extract_short_id(
+                                    affiliation.get("institution", {}).get("id")
+                                )
+                                if inst_id:
+                                    institutions.append(inst_id)
+        data["_institution_ids"] = institutions
+        
+        # Process source ID safely
+        primary_location = data.get("primary_location", {})
+        if isinstance(primary_location, dict):
+            source = primary_location.get("source", {})
+            if isinstance(source, dict) and source.get("id"):
+                data["_source_id"] = extract_short_id(source["id"])
+        # Process fields safely
+        fields = data.get("fields", [])
+        if isinstance(fields, list):
+            data["_field_ids"] = [
+                field_id for f in fields
+                if isinstance(f, dict)
+                for field_id in [extract_short_id(f.get("id"))]
+                if field_id
+            ]
+            
+        # Process subfields safely
+        subfields = data.get("subfields", [])
+        if isinstance(subfields, list):
+            data["_subfield_ids"] = [
+                subfield_id for f in subfields
+                if isinstance(f, dict)
+                for subfield_id in [extract_short_id(f.get("id"))]
+                if subfield_id
+            ]
+            
+        # Process topics safely
+        topics = data.get("topics", [])
+        if isinstance(topics, list):
+            data["_topic_ids"] = [
+                topic_id for t in topics
+                if isinstance(t, dict)
+                for topic_id in [extract_short_id(t.get("id"))]
+                if topic_id
+            ]
+            
+        # Process funders safely
+        funder_ids = []
+        grants = data.get("grants", [])
+        if isinstance(grants, list):
+            for grant in grants:
+                if isinstance(grant, dict):
+                    funder = grant.get("funder", {})
+                    if isinstance(funder, dict) and funder.get("id"):
+                        funder_id = extract_short_id(funder["id"])
+                        if funder_id:
+                            funder_ids.append(funder_id)
+        data["_funder_ids"] = funder_ids
+            
+        # Process domains safely
+        domains = data.get("domains", [])
+        if isinstance(domains, list):
+            data["_domain_ids"] = [
+                domain_id for d in domains
+                if isinstance(d, dict)
+                for domain_id in [extract_short_id(d.get("id"))]
+                if domain_id
+            ]
+            
+        # Process publisher safely
+        primary_location = data.get("primary_location", {})
+        if isinstance(primary_location, dict):
+            source = primary_location.get("source", {})
+            if isinstance(source, dict):
+                publisher = source.get("publisher", {})
+                if isinstance(publisher, dict) and publisher.get("id"):
+                    data["_publisher_id"] = extract_short_id(publisher["id"])
+            
     return data
 
+def get_last_import_date(db, entity_type):
+    """Get the most recent update date for an entity type from the database"""
+    try:
+        # Try to find the most recent document based on _update_date
+        latest_doc = db[entity_type].find_one(
+            {"_update_date": {"$exists": True}},
+            sort=[("_update_date", -1)]
+        )
+        if latest_doc and "_update_date" in latest_doc:
+            return latest_doc["_update_date"]
+    except Exception as e:
+        logger.warning(f"Error getting last import date for {entity_type}: {e}")
+    return None
+
 # Entity types to import
-ENTITY_TYPES = ["works", "authors", "concepts"]
+ENTITY_TYPES = [
+    "works", "authors", "concepts",
+    "institutions", "sources", "topics",
+    "fields", "subfields",
+    "domains", "funders", "publishers"
+]
+
+# Note: Index creation has been moved to update_openalex_index.py
 
 def process_entity_files(db, entity_type, limit=None):
     """Process all files for a given entity type"""
     collection = db[entity_type]
+    started_import = False
     
-    # Create indexes for common queries
-    collection.create_index([("id", ASCENDING)], unique=True)
-    
-    if entity_type == "works":
-        collection.create_index([("title", ASCENDING)])
-        collection.create_index([("publication_year", ASCENDING)])
-        collection.create_index([("cited_by_count", ASCENDING)])
-        collection.create_index([("type", ASCENDING)])
-        collection.create_index([("abstract", ASCENDING)])
-        collection.create_index([("_author_ids", ASCENDING)])
-        collection.create_index([("_concept_ids", ASCENDING)])
-    elif entity_type == "authors":
-        collection.create_index([("display_name", ASCENDING)])
-        collection.create_index([("cited_by_count", ASCENDING)])
-        collection.create_index([("works_count", ASCENDING)])
-    elif entity_type == "concepts":
-        collection.create_index([("display_name", ASCENDING)])
-        collection.create_index([("level", ASCENDING)])
-        collection.create_index([("works_count", ASCENDING)])
+    # Get the last import date for this entity type
+    last_import_date = get_last_import_date(db, entity_type)
+    if last_import_date:
+        logger.info(f"Found existing data for {entity_type}, last import date: {last_import_date}")
     
     snapshot_dirs = find_snapshot_dirs(entity_type)
     if not snapshot_dirs:
         return
+    
+    # Filter snapshot directories to only process newer ones
+    if last_import_date:
+        snapshot_dirs = [
+            d for d in snapshot_dirs
+            if d.name.split("=")[1] > last_import_date
+        ]
+        if not snapshot_dirs:
+            logger.info(f"No new data found for {entity_type} after {last_import_date}")
+            return
+        logger.info(f"Found {len(snapshot_dirs)} new snapshot(s) for {entity_type}")
     
     total_imported = 0
     
@@ -159,12 +288,20 @@ def process_entity_files(db, entity_type, limit=None):
                             batch_size = min(1000, (limit - total_imported if limit else 1000))
                             if len(batch) >= batch_size:
                                 try:
-                                    collection.insert_many(batch, ordered=False)
+                                    # Convert batch to upsert operations
+                                    operations = [
+                                        UpdateOne(
+                                            {"_id": doc["_id"]},
+                                            {"$set": doc},
+                                            upsert=True
+                                        ) for doc in batch
+                                    ]
+                                    result = collection.bulk_write(operations, ordered=False)
+                                    total_imported += result.upserted_count + result.modified_count
+                                    logger.info(f"Imported {total_imported} {entity_type} records (upserted: {result.upserted_count}, modified: {result.modified_count})")
                                 except PyMongoError as e:
-                                    logger.warning(f"Error inserting batch: {str(e)}")
+                                    logger.warning(f"Error processing batch: {str(e)}")
                                 
-                                total_imported += len(batch)
-                                logger.info(f"Imported {total_imported} {entity_type} records")
                                 batch = []
                                 
                                 if limit and total_imported >= limit:
@@ -180,11 +317,19 @@ def process_entity_files(db, entity_type, limit=None):
                     # Process any remaining records in the last batch
                     if batch:
                         try:
-                            collection.insert_many(batch, ordered=False)
+                            # Convert batch to upsert operations
+                            operations = [
+                                UpdateOne(
+                                    {"_id": doc["_id"]},
+                                    {"$set": doc},
+                                    upsert=True
+                                ) for doc in batch
+                            ]
+                            result = collection.bulk_write(operations, ordered=False)
+                            total_imported += result.upserted_count + result.modified_count
+                            logger.info(f"Imported {total_imported} {entity_type} records (upserted: {result.upserted_count}, modified: {result.modified_count})")
                         except PyMongoError as e:
-                            logger.warning(f"Error inserting final batch: {str(e)}")
-                        total_imported += len(batch)
-                        logger.info(f"Imported {total_imported} {entity_type} records")
+                            logger.warning(f"Error processing final batch: {str(e)}")
             
             except Exception as e:
                 logger.error(f"Error processing file {part_file}: {str(e)}")
@@ -268,6 +413,8 @@ def main():
                        help="Wipe the existing database before importing")
     parser.add_argument("--status", action="store_true",
                        help="Show current database status")
+    parser.add_argument("--force-full", action="store_true",
+                       help="Force full import even if data exists (default: only import new data)")
     args = parser.parse_args()
     
     try:
@@ -303,6 +450,20 @@ def main():
                     logger.info("Import cancelled")
                     sys.exit(0)
         
+        # If force-full is specified, wipe the database first
+        if args.force_full and not args.wipe:
+            if confirm_wipe(db):
+                logger.info("Force full import requested. Wiping existing database...")
+                client.drop_database('openalex')
+                db = client.openalex
+                logger.info("Database wiped")
+            else:
+                logger.info("Database wipe cancelled")
+                if input("Do you want to continue with incremental import instead? [y/N] ").lower() not in ['y', 'yes']:
+                    logger.info("Import cancelled")
+                    sys.exit(0)
+                args.force_full = False
+
         # Process each entity type
         for entity_type in ENTITY_TYPES:
             process_entity_files(db, entity_type, args.limit)
@@ -320,6 +481,7 @@ def main():
         end_time = datetime.now()
         duration = end_time - start_time
         logger.info(f"Import completed in {duration}")
+        logger.info("Run 'update_openalex_index.py --only-indexes' to create indexes")
         
     except PyMongoError as e:
         logger.error(f"MongoDB error: {str(e)}")

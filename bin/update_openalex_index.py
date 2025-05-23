@@ -1,9 +1,26 @@
 #!/usr/bin/env python3
 """
-OpenAlex Index Updater
+OpenAlex Index Manager
 
-This script updates the MongoDB index for works and adds citation keys.
-It generates citation keys based on the first author's last name, year, and significant title words.
+This script manages indexes for the OpenAlex MongoDB database and adds citation keys to works.
+It can create/update indexes for all collections and generate citation keys for works.
+
+The script can be run in two modes:
+1. Index-only mode (--only-indexes): Only creates/updates indexes for all collections
+2. Normal mode: Updates works with citation keys and creates necessary indexes
+
+Citation keys are generated based on first author's last name, year, and significant title words.
+
+Usage:
+    python update_openalex_index.py [--only-indexes] [--mongo-uri MONGO_URI]
+    python update_openalex_index.py [--limit LIMIT] [--batch-size SIZE]
+
+Options:
+    --only-indexes        Only create/update indexes without updating citation keys
+    --mongo-uri URI      MongoDB connection URI (default: mongodb://localhost:27017)
+    --limit LIMIT        Limit the number of works to process for citation keys
+    --batch-size SIZE    Number of documents to process in each batch
+    --skip-indexes       Skip index creation (use if indexes already exist)
 """
 import os
 import re
@@ -245,6 +262,82 @@ async def update_works_index(db, limit: Optional[int] = None, batch_size: int = 
         logger.error(f"Unexpected error: {str(e)}")
         raise
 
+def create_all_indexes(db):
+    """Create all necessary indexes for all collections"""
+    ENTITY_TYPES = [
+        "works", "authors", "concepts",
+        "institutions", "sources", "topics",
+        "fields", "subfields", "domains", 
+        "funders", "publishers"
+    ]
+    
+    logger.info("Starting to create indexes for all collections...")
+    
+    for entity_type in ENTITY_TYPES:
+        collection = db[entity_type]
+        logger.info(f"Creating indexes for {entity_type}...")
+        
+        # Common indexes for all collections
+        collection.create_index([("id", ASCENDING)], unique=True, background=True)
+        collection.create_index([("display_name", ASCENDING)], background=True)
+        collection.create_index([("works_count", ASCENDING)], background=True)
+        collection.create_index([("cited_by_count", ASCENDING)], background=True)
+        collection.create_index([("updated_date", ASCENDING)], background=True)
+        collection.create_index([("created_date", ASCENDING)], background=True)
+        collection.create_index([("ids.openalex", ASCENDING)], background=True)
+        
+        # Collection-specific indexes
+        if entity_type == "works":
+            collection.create_index([("publication_year", ASCENDING)], background=True)
+            collection.create_index([("type", ASCENDING)], background=True)
+            collection.create_index([("open_access.is_oa", ASCENDING)], background=True)
+            collection.create_index([("authorships.author.id", ASCENDING)], background=True)
+            collection.create_index([("_author_ids", ASCENDING)], background=True)
+            collection.create_index([("concepts.id", ASCENDING)], background=True)
+            collection.create_index([("_concept_ids", ASCENDING)], background=True)
+            collection.create_index([("ids.doi", ASCENDING)], background=True)
+            collection.create_index([("_citation_key", ASCENDING)], background=True)
+            # Create text index for search functionality
+            collection.create_index([("search_blob", "text")], 
+                                 background=True,
+                                 default_language="english",
+                                 language_override="no_language")
+            
+        elif entity_type == "authors":
+            collection.create_index([("last_known_institution.id", ASCENDING)], background=True)
+            collection.create_index([("x_concepts.id", ASCENDING)], background=True)
+            collection.create_index([("ids.orcid", ASCENDING)], background=True)
+            collection.create_index([("ids.scopus", ASCENDING)], background=True)
+            
+        elif entity_type == "concepts":
+            collection.create_index([("level", ASCENDING)], background=True)
+            collection.create_index([("ancestors.id", ASCENDING)], background=True)
+            collection.create_index([("related_concepts.id", ASCENDING)], background=True)
+            
+        elif entity_type == "institutions":
+            collection.create_index([("type", ASCENDING)], background=True)
+            collection.create_index([("country_code", ASCENDING)], background=True)
+            collection.create_index([("ids.ror", ASCENDING)], background=True)
+            collection.create_index([("ids.grid", ASCENDING)], background=True)
+            collection.create_index([("geo.country_code", ASCENDING)], background=True)
+            
+        elif entity_type == "domains":
+            collection.create_index([("ids.wikidata", ASCENDING)], background=True)
+            collection.create_index([("ids.wikipedia", ASCENDING)], background=True)
+            collection.create_index([("fields.id", ASCENDING)], background=True)
+            collection.create_index([("siblings.id", ASCENDING)], background=True)
+            
+        elif entity_type == "funders":
+            collection.create_index([("country_code", ASCENDING)], background=True)
+            collection.create_index([("grants_count", ASCENDING)], background=True)
+            collection.create_index([("roles.role", ASCENDING)], background=True)
+            collection.create_index([("roles.id", ASCENDING)], background=True)
+            collection.create_index([("ids.ror", ASCENDING)], background=True)
+            collection.create_index([("ids.crossref", ASCENDING)], background=True)
+            collection.create_index([("x_concepts.id", ASCENDING)], background=True)
+    
+    logger.info("All index creation jobs have been initiated")
+
 async def main():
     parser = argparse.ArgumentParser(description="Update OpenAlex works index and citation keys")
     parser.add_argument("--mongo-uri", type=str, default=MONGO_URI,
@@ -254,6 +347,8 @@ async def main():
                        help="Skip index creation (use if indexes already exist)")
     parser.add_argument("--batch-size", type=int, default=1000,
                        help="Number of documents to process in each batch (default: 1000, max recommended: 10000)")
+    parser.add_argument("--only-indexes", action="store_true",
+                       help="Only create indexes without updating citation keys")
     args = parser.parse_args()
     
     try:
@@ -262,7 +357,17 @@ async def main():
         db = client.openalex
         logger.info("Connected to MongoDB")
         
-        # Update works
+        start_time = datetime.now()
+        
+        # Handle index creation
+        if args.only_indexes:
+            logger.info("Creating indexes for all collections...")
+            create_all_indexes(db)
+            duration = datetime.now() - start_time
+            logger.info(f"Index creation completed in {duration}")
+            return
+            
+        # Update works (including their indexes unless --skip-indexes)
         if args.skip_indexes:
             logger.info("Skipping index creation as requested")
         logger.info(f"Using batch size: {args.batch_size}")
@@ -275,7 +380,8 @@ async def main():
             "type": "works_citation_keys"
         })
         
-        logger.info("Index update completed successfully")
+        duration = datetime.now() - start_time
+        logger.info(f"Citation key update completed in {duration}")
         
     except Exception as e:
         logger.error(f"Error updating index: {str(e)}")
