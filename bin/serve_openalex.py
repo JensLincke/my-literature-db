@@ -89,11 +89,18 @@ async def get_root():
     # Get last import info
     metadata = await db.metadata.find_one({"key": "last_import"})
     
+    # Get estimated counts (much faster than exact counts)
+    entity_counts = {
+        "works": await db.works.estimated_document_count(),
+        "authors": await db.authors.estimated_document_count(),
+        "concepts": await db.concepts.estimated_document_count()
+    }
+    
     api_info = {
         "name": "OpenAlex Local API",
         "version": "1.0.0",
         "last_import": metadata["value"] if metadata else None,
-        "entity_counts": metadata.get("entity_counts", {}) if metadata else {},
+        "entity_counts": entity_counts,
         "endpoints": [
             {"path": "/works", "description": "List and search works"},
             {"path": "/works/{id}", "description": "Get details of a specific work"},
@@ -106,17 +113,57 @@ async def get_root():
     }
     return api_info
 
-@app.get("/works")
+@app.get("/works", 
+    summary="List and search works",
+    description="Returns a paginated list of academic works that can be filtered, sorted, and grouped.")
 async def list_works(
-    title: Optional[str] = None,
-    year: Optional[int] = None,
-    type: Optional[str] = None,
-    cursor: Optional[str] = None,
-    sort_by: str = Query("_id", description="Field to sort by"),
-    sort_order: str = Query("asc", description="Sort order (asc or desc)"),
-    include_count: bool = Query(False, description="Whether to include total count (may be slow for large datasets)"),
-    per_page: int = Query(25, gt=0, le=MAX_RESULTS_PER_PAGE),
-    group_by: Optional[str] = Query(None, description="Field to group results by")
+    title: Optional[str] = Query(
+        None,
+        description="Filter works by title (case-insensitive partial match)",
+        example="machine learning"
+    ),
+    year: Optional[int] = Query(
+        None,
+        description="Filter works by publication year",
+        example=2023,
+        ge=1000,
+        le=2030
+    ),
+    type: Optional[str] = Query(
+        None,
+        description="Filter works by type (e.g., 'article', 'book', 'conference-paper')",
+        example="article"
+    ),
+    cursor: Optional[str] = Query(
+        None,
+        description="Cursor for pagination (pass the next_cursor value from the previous response)"
+    ),
+    sort_by: str = Query(
+        "_id",
+        description="Field to sort results by",
+        enum=["_id", "publication_year", "cited_by_count", "title"]
+    ),
+    sort_order: str = Query(
+        "asc",
+        description="Sort order",
+        enum=["asc", "desc"]
+    ),
+    include_count: bool = Query(
+        False,
+        description="Whether to include total count in response (may be slow for large datasets)"
+    ),
+    per_page: int = Query(
+        25,
+        description="Number of results per page",
+        gt=0,
+        le=MAX_RESULTS_PER_PAGE,
+        example=25
+    ),
+    group_by: Optional[str] = Query(
+        None,
+        description="Group results by field",
+        enum=["publication_year", "type", "language", "is_retracted", "has_fulltext"]
+    )
 ):
     """List and search works with optional grouping"""
     # Build query
@@ -288,11 +335,28 @@ async def get_work(work_id: str):
     # Convert MongoDB document to JSON-serializable object
     return jsonable_encoder(work)
 
-@app.get("/authors")
+@app.get("/authors",
+    summary="List and search authors",
+    description="Returns a paginated list of academic authors sorted by citation count.")
 async def list_authors(
-    name: Optional[str] = None,
-    page: int = Query(1, gt=0),
-    per_page: int = Query(25, gt=0, le=MAX_RESULTS_PER_PAGE)
+    name: Optional[str] = Query(
+        None,
+        description="Filter authors by name (case-insensitive partial match)",
+        example="John Smith"
+    ),
+    page: int = Query(
+        1,
+        description="Page number for pagination",
+        gt=0,
+        example=1
+    ),
+    per_page: int = Query(
+        25,
+        description="Number of results per page",
+        gt=0,
+        le=MAX_RESULTS_PER_PAGE,
+        example=25
+    )
 ):
     """List and search authors"""
     # Build query
@@ -341,12 +405,35 @@ async def get_author(author_id: str):
     author["works"] = works
     return jsonable_encoder(author)
 
-@app.get("/concepts")
+@app.get("/concepts",
+    summary="List and search concepts",
+    description="Returns a paginated list of academic concepts/topics sorted by number of works.")
 async def list_concepts(
-    name: Optional[str] = None,
-    level: Optional[int] = None,
-    page: int = Query(1, gt=0),
-    per_page: int = Query(25, gt=0, le=MAX_RESULTS_PER_PAGE)
+    name: Optional[str] = Query(
+        None,
+        description="Filter concepts by name (case-insensitive partial match)",
+        example="artificial intelligence"
+    ),
+    level: Optional[int] = Query(
+        None,
+        description="Filter concepts by level (0 is most general, higher numbers are more specific)",
+        ge=0,
+        le=5,
+        example=1
+    ),
+    page: int = Query(
+        1,
+        description="Page number for pagination",
+        gt=0,
+        example=1
+    ),
+    per_page: int = Query(
+        25,
+        description="Number of results per page",
+        gt=0,
+        le=MAX_RESULTS_PER_PAGE,
+        example=25
+    )
 ):
     """List and search concepts"""
     # Build query
@@ -397,11 +484,32 @@ async def get_concept(concept_id: str):
     concept["works"] = works
     return jsonable_encoder(concept)
 
-@app.get("/search")
+@app.get("/search",
+    summary="Search across all entities",
+    description="""
+    Performs a global search across works, authors, and concepts.
+    Results are sorted by citation count (for works and authors) or work count (for concepts).
+    Returns a mixed list of entities, each with an entity_type field indicating the type ('work', 'author', or 'concept').
+    """)
 async def search(
-    q: str,
-    page: int = Query(1, gt=0),
-    per_page: int = Query(25, gt=0, le=MAX_RESULTS_PER_PAGE)
+    q: str = Query(
+        ...,
+        description="Search query string (searches titles, abstracts, names)",
+        example="machine learning"
+    ),
+    page: int = Query(
+        1,
+        description="Page number for pagination",
+        gt=0,
+        example=1
+    ),
+    per_page: int = Query(
+        25,
+        description="Number of results per page",
+        gt=0,
+        le=MAX_RESULTS_PER_PAGE,
+        example=25
+    )
 ):
     """Search across all entities"""
     skip = (page - 1) * per_page
@@ -467,3 +575,71 @@ async def search(
         },
         "results": all_results[skip:skip + per_page]
     }
+
+@app.get("/works/search")
+async def search_works(
+    q: str = Query(
+        ..., 
+        description="Search query. Enter terms in any order (e.g. 'John Smith 2023 machine learning') or use quotes for exact phrases"
+    ),
+    skip: int = Query(0, ge=0),
+    limit: int = Query(10, ge=1, le=100),
+    explain_score: bool = Query(False, description="Include explanation of search score")
+):
+    """
+    Search works using MongoDB text search. Features:
+    - Natural language search through combined field of authors, year, and title
+    - Order of terms doesn't matter
+    - Use quotes for exact phrases (e.g. "John Smith" or "machine learning")
+    - Returns results sorted by relevance
+    """
+    search_query = {"$text": {"$search": q}}
+    projection = {
+        "score": {"$meta": "textScore"},
+        "title": 1,
+        "publication_year": 1,
+        "authorships": 1,
+        "type": 1,
+        "_citation_key": 1
+    }
+    
+    if explain_score:
+        projection["search_blob"] = 1
+    
+    cursor = db.works.find(
+        search_query,
+        projection
+    ).sort([("score", {"$meta": "textScore"})])
+    
+    # Get total count
+    total = await db.works.count_documents(search_query)
+    
+    # Apply pagination
+    documents = await cursor.skip(skip).limit(limit).to_list(None)
+    
+    if explain_score:
+        # Enhance results with match explanation
+        for doc in documents:
+            score = doc.get("score", 0)
+            search_blob = doc.get("search_blob", "").lower()
+            terms = [t.strip('"').lower() for t in q.split()]
+            
+            # Find which terms matched in the search blob
+            matches = [term for term in terms if term in search_blob]
+            
+            doc["_score_explanation"] = {
+                "score": score,
+                "matching_terms": matches,
+                "search_blob": search_blob  # Include for transparency
+            }
+            # Remove search_blob from final output
+            doc.pop("search_blob", None)
+    
+    return {
+        "total": total,
+        "skip": skip,
+        "limit": limit,
+        "results": documents
+    }
+
+
