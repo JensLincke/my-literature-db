@@ -905,6 +905,82 @@ async def get_source(source_id: str):
     source["works"] = works
     return jsonable_encoder(source)
 
+@app.get("/publishers/search")
+async def search_publishers(
+    q: str = Query(
+        ..., 
+        description="Search query. Enter terms to search in publisher names. Use quotes for exact phrases."
+    ),
+    skip: int = Query(0, ge=0),
+    limit: int = Query(10, ge=1, le=100),
+    explain_score: bool = Query(False, description="Include explanation of search score")
+):
+    """
+    Search publishers using MongoDB text search. Features:
+    - Natural language search through publisher names
+    - Use quotes for exact phrases (e.g. "Oxford University Press")
+    - Returns results sorted by relevance
+    """
+    try:
+        search_query = {"$text": {"$search": q}}
+        projection = {
+            "score": {"$meta": "textScore"},
+            "display_name": 1,
+            "works_count": 1,
+            "country_code": 1
+        }
+        
+        cursor = db.publishers.find(
+            search_query,
+            projection
+        ).sort([("score", {"$meta": "textScore"})])
+        
+        # Get total count
+        total = await db.publishers.count_documents(search_query)
+        
+        if total == 0:
+            return {
+                "total": 0,
+                "skip": skip,
+                "limit": limit,
+                "results": [],
+                "message": "No matching publishers found. Try different search terms."
+            }
+    except Exception as e:
+        # If text search fails due to missing index
+        raise HTTPException(
+            status_code=503,
+            detail="Text search is not available. Please run the update_openalex_index.py script to create the required indexes."
+        )
+
+    if total == 0:
+        return {
+            "total": 0,
+            "skip": skip,
+            "limit": limit,
+            "results": [],
+            "message": "No matching publishers found. Try different search terms."
+        }
+    
+    # Apply pagination
+    documents = await cursor.skip(skip).limit(limit).to_list(None)
+    
+    if explain_score:
+        # Enhance results with match explanation
+        for doc in documents:
+            score = doc.get("score", 0)
+            doc["_score_explanation"] = {
+                "score": score,
+                "query": q
+            }
+    
+    return {
+        "total": total,
+        "skip": skip,
+        "limit": limit,
+        "results": documents
+    }
+
 
 
 
