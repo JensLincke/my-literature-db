@@ -12,6 +12,7 @@ from motor.motor_asyncio import AsyncIOMotorDatabase
 from pymongo import DESCENDING
 
 from handlers import BaseEntityHandler, WorksHandler
+from filter_utils import parse_filter_param
 from api_utils import (
     PaginationParams, SearchParams, entity_list_description, entity_get_description,
     entity_search_description, PaginatedResponse, SearchResponse
@@ -62,6 +63,7 @@ class EntityRouter:
         )
         async def list_entities(
             pagination: PaginationParams = Depends(),
+            filter: Optional[str] = Query(None, description="OpenAlex-style filter parameter. Examples: 'publication_year:2020', 'cited_by_count:>100'"),
             filters: Any = Depends(self.filter_params_class) if self.filter_params_class else None
         ):
             """List and filter entities with pagination"""
@@ -100,6 +102,7 @@ class EntityRouter:
                 page=pagination.page,
                 per_page=pagination.per_page,
                 sort_field=self.sort_field,
+                filter_param=filter,
                 extra_filters=extra_filters
             )
 
@@ -155,7 +158,10 @@ class EntityRouter:
                 description=entity_search_description(self.entity_name_plural),
                 response_model=SearchResponse
             )
-            async def search_entities(search_params: SearchParams = Depends()):
+            async def search_entities(
+                search_params: SearchParams = Depends(),
+                filter: Optional[str] = Query(None, description="OpenAlex-style filter parameter")
+            ):
                 """Search entities using MongoDB text search"""
                 # Custom search handler for works
                 if self.entity_type == 'works':
@@ -163,15 +169,20 @@ class EntityRouter:
                         search_params.q, 
                         search_params.skip, 
                         search_params.limit, 
-                        search_params.explain_score
+                        search_params.explain_score,
+                        None,  # Don't parse the filter here, pass it as string
+                        filter
                     )
                 else:
                     # Generic search for other entity types
+                    # Process filter for non-work entities
+                    filter_query = parse_filter_param(filter) if filter else None
                     return await self.handlers[self.entity_type].search_entities(
                         search_params.q,
                         search_params.skip,
                         search_params.limit,
-                        search_params.explain_score
+                        search_params.explain_score,
+                        filter_query
                     )
 
 

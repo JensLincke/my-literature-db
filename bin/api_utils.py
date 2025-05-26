@@ -225,7 +225,61 @@ class DomainsFilterParams:
 # Documentation helper functions
 def entity_list_description(entity_name: str) -> str:
     """Generate consistent description for entity list endpoints"""
-    return f"Returns a paginated list of academic {entity_name} that can be filtered and sorted."
+    common_filter_examples = """
+#### Common Filter Syntax
+- Basic equality: `filter=publication_year:2020`
+- Comparison: `filter=publication_year:>2018`, `filter=cited_by_count:>=100`
+- Text search: `filter=display_name.search:neural+networks`
+- Exact match: `filter=display_name.equals:Neural Networks`
+- Multiple values (OR): `filter=publication_year:2020|2021|2022` 
+- Multiple filters (AND): `filter=publication_year:>2018,cited_by_count:>10`
+"""
+
+    work_filter_examples = """
+#### Works-specific Filters
+- By type: `filter=type:journal-article`
+- By open access status: `filter=is_oa:true`
+- By DOI presence: `filter=has_doi:true`
+- By citation count: `filter=cited_by_count:>100`
+- By author: `filter=authorships.author.id:A12345`
+- By institution: `filter=institutions.id:I12345`
+- By concept: `filter=concepts.id:C12345`
+- By publication year range: `filter=publication_year:>=2018,publication_year:<=2022`
+"""
+
+    author_filter_examples = """
+#### Author-specific Filters
+- By name: `filter=display_name.search:Smith`
+- By institution: `filter=last_known_institution.id:I12345` 
+- By works count: `filter=works_count:>50`
+- By citation count: `filter=cited_by_count:>1000`
+"""
+
+    concept_filter_examples = """
+#### Concept-specific Filters
+- By name: `filter=display_name.search:learning`
+- By level: `filter=level:1` (0=root to 5=specific)
+- By works count: `filter=works_count:>1000`
+"""
+
+    institution_filter_examples = """
+#### Institution-specific Filters
+- By name: `filter=display_name.search:Harvard`
+- By country: `filter=country_code:us`
+- By type: `filter=type:education`
+- By works count: `filter=works_count:>5000`
+"""
+    
+    if entity_name == "works":
+        return f"Returns a paginated list of academic {entity_name} that can be filtered and sorted. {common_filter_examples} {work_filter_examples}"
+    elif entity_name == "authors":
+        return f"Returns a paginated list of academic {entity_name} that can be filtered and sorted. {common_filter_examples} {author_filter_examples}"
+    elif entity_name == "concepts":
+        return f"Returns a paginated list of academic {entity_name} that can be filtered and sorted. {common_filter_examples} {concept_filter_examples}"
+    elif entity_name == "institutions":
+        return f"Returns a paginated list of academic {entity_name} that can be filtered and sorted. {common_filter_examples} {institution_filter_examples}" 
+    
+    return f"Returns a paginated list of academic {entity_name} that can be filtered and sorted. {common_filter_examples}"
 
 
 def entity_get_description(entity_name: str) -> str:
@@ -235,7 +289,20 @@ def entity_get_description(entity_name: str) -> str:
 
 def entity_search_description(entity_name: str) -> str:
     """Generate consistent description for entity search endpoints"""
-    return f"Search {entity_name} using MongoDB text search with relevance ranking."
+    search_description = f"Search {entity_name} using MongoDB text search with relevance ranking."
+    filter_examples = """
+#### Combined with Filters
+You can combine your search query with filters to narrow down results:
+
+`/search?q=neural networks&filter=publication_year:>2018,cited_by_count:>100`
+
+This will search for "neural networks" but only return results published after 2018 with over 100 citations.
+"""
+    
+    if entity_name in ["works", "authors", "concepts"]:
+        return f"{search_description} {filter_examples}"
+    
+    return search_description
 
 
 # Response models for documentation

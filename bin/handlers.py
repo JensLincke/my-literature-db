@@ -5,6 +5,8 @@ from fastapi import HTTPException, Query
 from motor.motor_asyncio import AsyncIOMotorCollection
 from pymongo import DESCENDING
 
+from filter_utils import parse_filter_param
+
 class BaseEntityHandler:
     """Base handler for all entity types (works, authors, concepts, etc.)"""
     
@@ -18,12 +20,20 @@ class BaseEntityHandler:
         page: int = 1,
         per_page: int = 25,
         sort_field: str = "works_count",
+        filter_param: Optional[str] = None,
         extra_filters: Dict = None
     ) -> Dict[str, Any]:
         """Generic method for listing entities with pagination"""
         query = {}
         if name:
             query["display_name"] = {"$regex": name, "$options": "i"}
+        
+        # Add OpenAlex-style filter if provided
+        if filter_param:
+            filter_query = parse_filter_param(filter_param)
+            query.update(filter_query)
+            
+        # Add traditional filters if provided
         if extra_filters:
             query.update(extra_filters)
         
@@ -62,11 +72,19 @@ class BaseEntityHandler:
         skip: int = 0,
         limit: int = 10,
         explain_score: bool = False,
+        filter_query: Dict = None,
         projection: Dict = None
     ) -> Dict[str, Any]:
         """Generic method for text search across entities"""
         try:
+            # Basic text search query
             search_query = {"$text": {"$search": q}}
+            
+            # Add any filter conditions
+            if filter_query:
+                # Combine text search with filter using $and
+                search_query = {"$and": [search_query, filter_query]}
+            
             if not projection:
                 projection = {
                     "score": {"$meta": "textScore"},
@@ -120,7 +138,8 @@ class WorksHandler(BaseEntityHandler):
         title: Optional[str] = None,
         year: Optional[int] = None,
         type: Optional[str] = None,
-        per_page: int = 25
+        per_page: int = 25,
+        filter: Optional[str] = None
     ):
         extra_filters = {}
         if title:
@@ -133,10 +152,23 @@ class WorksHandler(BaseEntityHandler):
         return await self.list_entities(
             per_page=per_page,
             sort_field="cited_by_count",
+            filter_param=filter,
             extra_filters=extra_filters
         )
 
-    async def search_works(self, q: str, skip: int = 0, limit: int = 10, explain_score: bool = False):
+    async def search_works(
+        self, 
+        q: str, 
+        skip: int = 0, 
+        limit: int = 10, 
+        explain_score: bool = False,
+        filter_query: Dict = None,
+        filter_param: Optional[str] = None
+    ):
+        # If we received a filter parameter string, parse it
+        if filter_param and not filter_query:
+            filter_query = parse_filter_param(filter_param)
+            
         projection = {
             "score": {"$meta": "textScore"},
             "title": 1,
@@ -149,7 +181,14 @@ class WorksHandler(BaseEntityHandler):
         if explain_score:
             projection["search_blob"] = 1
             
-        result = await self.search_entities(q, skip, limit, explain_score, projection)
+        result = await self.search_entities(
+            q, 
+            skip, 
+            limit, 
+            explain_score, 
+            filter_query, 
+            projection
+        )
         
         if explain_score and result.get("results"):
             for doc in result["results"]:
