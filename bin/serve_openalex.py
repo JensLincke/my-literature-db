@@ -344,7 +344,7 @@ async def search_works(
     - Use quotes for exact phrases (e.g. "John Smith" or "machine learning")
     - Returns results sorted by relevance
     """
-    # Try direct text search first
+    # Perform text search using MongoDB text index
     try:
         search_query = {"$text": {"$search": q}}
         projection = {
@@ -358,7 +358,7 @@ async def search_works(
         
         if explain_score:
             projection["search_blob"] = 1
-        wgh
+
         cursor = db.works.find(
             search_query,
             projection
@@ -367,26 +367,11 @@ async def search_works(
         # Get total count
         total = await db.works.count_documents(search_query)
         
-        if total == 0:
-            # If no results with text search, fallback to regex search
-            regex_query = {
-                "$or": [
-                    {"title": {"$regex": q, "$options": "i"}},
-                    {"search_blob": {"$regex": q, "$options": "i"}}
-                ]
-            }
-            cursor = db.works.find(regex_query).sort("cited_by_count", DESCENDING)
-            total = await db.works.count_documents(regex_query)
     except Exception as e:
-        # If text search fails (e.g., no index), fallback to regex search
-        regex_query = {
-            "$or": [
-                {"title": {"$regex": q, "$options": "i"}},
-                {"search_blob": {"$regex": q, "$options": "i"}}
-            ]
-        }
-        cursor = db.works.find(regex_query).sort("cited_by_count", DESCENDING)
-        total = await db.works.count_documents(regex_query)
+        # If text search fails (e.g., no index), raise an error with more detail
+        raise HTTPException(
+            status_code=503,
+            detail=f"Text search is not available - the search index is still being built. Please wait for the index creation to complete. Error details: {str(e)}")
 
     if total == 0:
         return {
