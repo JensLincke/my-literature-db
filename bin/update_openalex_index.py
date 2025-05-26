@@ -303,7 +303,7 @@ def create_all_indexes(db):
                                  default_language="english",
                                  language_override="no_language")
             
-        elif entity_type == "authors":
+        elif entity_type == "authors":z
             collection.create_index([("last_known_institution.id", ASCENDING)], background=True)
             collection.create_index([("x_concepts.id", ASCENDING)], background=True)
             collection.create_index([("ids.orcid", ASCENDING)], background=True)
