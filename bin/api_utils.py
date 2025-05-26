@@ -164,6 +164,64 @@ class SourcesFilterParams:
         self.type = type
 
 
+class TopicsFilterParams:
+    """Filter parameters for topics"""
+    def __init__(
+        self,
+        name: Optional[str] = Query(
+            None,
+            description="Filter topics by name (case-insensitive partial match)",
+            example="artificial intelligence"
+        )
+    ):
+        self.name = name
+
+
+class FieldsFilterParams:
+    """Filter parameters for fields"""
+    def __init__(
+        self,
+        name: Optional[str] = Query(
+            None,
+            description="Filter fields by name (case-insensitive partial match)",
+            example="Computer Science"
+        )
+    ):
+        self.name = name
+
+
+class SubfieldsFilterParams:
+    """Filter parameters for subfields"""
+    def __init__(
+        self,
+        name: Optional[str] = Query(
+            None,
+            description="Filter subfields by name (case-insensitive partial match)",
+            example="Machine Learning"
+        ),
+        field: Optional[str] = Query(
+            None,
+            description="Filter subfields by parent field ID",
+            example="F15741424"
+        )
+    ):
+        self.name = name
+        self.field = field
+
+
+class DomainsFilterParams:
+    """Filter parameters for domains"""
+    def __init__(
+        self,
+        name: Optional[str] = Query(
+            None,
+            description="Filter domains by name (case-insensitive partial match)",
+            example="Natural Sciences"
+        )
+    ):
+        self.name = name
+
+
 # Documentation helper functions
 def entity_list_description(entity_name: str) -> str:
     """Generate consistent description for entity list endpoints"""

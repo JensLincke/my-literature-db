@@ -179,7 +179,8 @@ def create_entity_routers(app, db, handlers, jsonable_encoder):
     """Create and register all entity routers"""
     from api_utils import (
         WorksFilterParams, AuthorsFilterParams, ConceptsFilterParams,
-        InstitutionsFilterParams, PublishersFilterParams, SourcesFilterParams
+        InstitutionsFilterParams, PublishersFilterParams, SourcesFilterParams,
+        TopicsFilterParams, FieldsFilterParams, SubfieldsFilterParams, DomainsFilterParams
     )
     
     # Create router for works
@@ -263,5 +264,61 @@ def create_entity_routers(app, db, handlers, jsonable_encoder):
         filter_params_class=SourcesFilterParams,
         sort_field="works_count",
         related_entities=["works"],
+        jsonable_encoder=jsonable_encoder
+    )
+    
+    # Create router for topics
+    EntityRouter(
+        router=app,
+        db=db,
+        handlers=handlers,
+        entity_type="topics",
+        entity_name_singular="topic",
+        entity_name_plural="topics",
+        filter_params_class=TopicsFilterParams,
+        sort_field="works_count",
+        related_entities=["works"],
+        jsonable_encoder=jsonable_encoder
+    )
+    
+    # Create router for fields
+    EntityRouter(
+        router=app,
+        db=db,
+        handlers=handlers,
+        entity_type="fields",
+        entity_name_singular="field",
+        entity_name_plural="fields",
+        filter_params_class=FieldsFilterParams,
+        sort_field="works_count",
+        related_entities=["works", "subfields"],
+        jsonable_encoder=jsonable_encoder
+    )
+    
+    # Create router for subfields
+    EntityRouter(
+        router=app,
+        db=db,
+        handlers=handlers,
+        entity_type="subfields",
+        entity_name_singular="subfield",
+        entity_name_plural="subfields",
+        filter_params_class=SubfieldsFilterParams,
+        sort_field="works_count",
+        related_entities=["works", "fields"],
+        jsonable_encoder=jsonable_encoder
+    )
+    
+    # Create router for domains
+    EntityRouter(
+        router=app,
+        db=db,
+        handlers=handlers,
+        entity_type="domains",
+        entity_name_singular="domain",
+        entity_name_plural="domains",
+        filter_params_class=DomainsFilterParams,
+        sort_field="works_count",
+        related_entities=["works", "fields"],
         jsonable_encoder=jsonable_encoder
     )

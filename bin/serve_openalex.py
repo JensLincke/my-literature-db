@@ -94,6 +94,10 @@ async def startup_db_client():
     handlers["institutions"] = BaseEntityHandler(db.institutions, "Institution")
     handlers["publishers"] = BaseEntityHandler(db.publishers, "Publisher")
     handlers["sources"] = BaseEntityHandler(db.sources, "Source")
+    handlers["topics"] = BaseEntityHandler(db.topics, "Topic")
+    handlers["fields"] = BaseEntityHandler(db.fields, "Field")
+    handlers["subfields"] = BaseEntityHandler(db.subfields, "Subfield")
+    handlers["domains"] = BaseEntityHandler(db.domains, "Domain")
     
     # Register all entity routers
     create_entity_routers(app, db, handlers, jsonable_encoder)
@@ -116,7 +120,11 @@ async def get_root():
         "concepts": await db.concepts.estimated_document_count(),
         "institutions": await db.institutions.estimated_document_count(),
         "publishers": await db.publishers.estimated_document_count(),
-        "sources": await db.sources.estimated_document_count()
+        "sources": await db.sources.estimated_document_count(),
+        "topics": await db.topics.estimated_document_count(),
+        "fields": await db.fields.estimated_document_count(),
+        "subfields": await db.subfields.estimated_document_count(),
+        "domains": await db.domains.estimated_document_count()
     }
     
     api_info = {
@@ -136,7 +144,15 @@ async def get_root():
             {"path": "/publishers", "description": "List and search publishers"},
             {"path": "/publishers/{id}", "description": "Get details of a specific publisher"},
             {"path": "/sources", "description": "List and search publication sources (journals, conferences, etc.)"},
-            {"path": "/sources/{id}", "description": "Get details of a specific source"}
+            {"path": "/sources/{id}", "description": "Get details of a specific source"},
+            {"path": "/topics", "description": "List and search research topics"},
+            {"path": "/topics/{id}", "description": "Get details of a specific topic"},
+            {"path": "/fields", "description": "List and search research fields"},
+            {"path": "/fields/{id}", "description": "Get details of a specific field"},
+            {"path": "/subfields", "description": "List and search research subfields"},
+            {"path": "/subfields/{id}", "description": "Get details of a specific subfield"},
+            {"path": "/domains", "description": "List and search research domains"},
+            {"path": "/domains/{id}", "description": "Get details of a specific domain"}
         ]
     }
     return api_info
