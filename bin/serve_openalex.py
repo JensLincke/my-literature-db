@@ -96,7 +96,11 @@ async def get_root():
     entity_counts = {
         "works": await db.works.estimated_document_count(),
         "authors": await db.authors.estimated_document_count(),
-        "concepts": await db.concepts.estimated_document_count()
+        "concepts": await db.concepts.estimated_document_count(),
+        "institutions": await db.institutions.estimated_document_count(),
+        "venues": await db.venues.estimated_document_count(),
+        "publishers": await db.publishers.estimated_document_count(),
+        "sources": await db.sources.estimated_document_count()
     }
     
     api_info = {
@@ -110,7 +114,23 @@ async def get_root():
             {"path": "/authors", "description": "List and search authors"},
             {"path": "/authors/{id}", "description": "Get details of a specific author"},
             {"path": "/concepts", "description": "List and search concepts"},
-            {"path": "/concepts/{id}", "description": "Get details of a specific concept"}
+            {"path": "/concepts/{id}", "description": "Get details of a specific concept"},
+            {"path": "/institutions", "description": "List and search institutions"},
+            {"path": "/institutions/{id}", "description": "Get details of a specific institution"},
+            {"path": "/venues", "description": "List and search publication venues"},
+            {"path": "/venues/{id}", "description": "Get details of a specific venue"},
+            {"path": "/publishers", "description": "List and search publishers"},
+            {"path": "/publishers/{id}", "description": "Get details of a specific publisher"},
+            {"path": "/sources", "description": "List and search sources"},
+            {"path": "/sources/{id}", "description": "Get details of a specific source"},
+            {"path": "/institutions", "description": "List and search institutions"},
+            {"path": "/institutions/{id}", "description": "Get details of a specific institution"},
+            {"path": "/venues", "description": "List and search venues"},
+            {"path": "/venues/{id}", "description": "Get details of a specific venue"},
+            {"path": "/publishers", "description": "List and search publishers"},
+            {"path": "/publishers/{id}", "description": "Get details of a specific publisher"},
+            {"path": "/sources", "description": "List and search sources"},
+            {"path": "/sources/{id}", "description": "Get details of a specific source"}
         ]
     }
     return api_info
@@ -583,6 +603,307 @@ async def get_concept(concept_id: str):
     
     concept["works"] = works
     return jsonable_encoder(concept)
+
+@app.get("/institutions",
+    summary="List and search institutions",
+    description="Returns a paginated list of academic institutions sorted by work count.")
+async def list_institutions(
+    name: Optional[str] = Query(
+        None,
+        description="Filter institutions by name (case-insensitive partial match)",
+        example="University of California"
+    ),
+    country: Optional[str] = Query(
+        None,
+        description="Filter institutions by country code",
+        example="US"
+    ),
+    page: int = Query(
+        1,
+        description="Page number for pagination",
+        gt=0,
+        example=1
+    ),
+    per_page: int = Query(
+        25,
+        description="Number of results per page",
+        gt=0,
+        le=MAX_RESULTS_PER_PAGE,
+        example=25
+    )
+):
+    """List and search institutions"""
+    # Build query
+    query = {}
+    if name:
+        query["display_name"] = {"$regex": name, "$options": "i"}
+    if country:
+        query["country_code"] = country.upper()
+    
+    # Execute query with pagination
+    skip = (page - 1) * per_page
+    cursor = db.institutions.find(query).sort("works_count", DESCENDING)
+    
+    # Get total count
+    total_count = await db.institutions.count_documents(query)
+    
+    # Get paginated results
+    results = await cursor.skip(skip).limit(per_page).to_list(per_page)
+    
+    return {
+        "meta": {
+            "count": len(results),
+            "total_count": total_count,
+            "page": page,
+            "per_page": per_page,
+            "total_pages": (total_count + per_page - 1) // per_page
+        },
+        "results": results
+    }
+
+@app.get("/institutions/{institution_id}")
+async def get_institution(institution_id: str):
+    """Get details of a specific institution"""
+    # Try to find institution by _id first, then by full id
+    institution = await db.institutions.find_one({"_id": institution_id})
+    if not institution:
+        # If not found by _id, try full id
+        institution = await db.institutions.find_one({"id": institution_id})
+        if not institution:
+            raise HTTPException(status_code=404, detail="Institution not found")
+    
+    # Get institution's top works
+    works = await db.works.find(
+        {"institution_ids": institution_id},
+        {"id": 1, "title": 1, "publication_year": 1, "cited_by_count": 1, "type": 1}
+    ).sort("cited_by_count", DESCENDING).limit(100).to_list(length=None)
+    
+    institution["works"] = works
+    return jsonable_encoder(institution)
+
+@app.get("/venues",
+    summary="List and search venues",
+    description="Returns a paginated list of publication venues (journals, conferences) sorted by work count.")
+async def list_venues(
+    name: Optional[str] = Query(
+        None,
+        description="Filter venues by name (case-insensitive partial match)",
+        example="Nature"
+    ),
+    type: Optional[str] = Query(
+        None,
+        description="Filter venues by type (journal, conference, repository)",
+        example="journal"
+    ),
+    page: int = Query(
+        1,
+        description="Page number for pagination",
+        gt=0,
+        example=1
+    ),
+    per_page: int = Query(
+        25,
+        description="Number of results per page",
+        gt=0,
+        le=MAX_RESULTS_PER_PAGE,
+        example=25
+    )
+):
+    """List and search venues"""
+    # Build query
+    query = {}
+    if name:
+        query["display_name"] = {"$regex": name, "$options": "i"}
+    if type:
+        query["type"] = type.lower()
+    
+    # Execute query with pagination
+    skip = (page - 1) * per_page
+    cursor = db.venues.find(query).sort("works_count", DESCENDING)
+    
+    # Get total count
+    total_count = await db.venues.count_documents(query)
+    
+    # Get paginated results
+    results = await cursor.skip(skip).limit(per_page).to_list(per_page)
+    
+    return {
+        "meta": {
+            "count": len(results),
+            "total_count": total_count,
+            "page": page,
+            "per_page": per_page,
+            "total_pages": (total_count + per_page - 1) // per_page
+        },
+        "results": results
+    }
+
+@app.get("/venues/{venue_id}")
+async def get_venue(venue_id: str):
+    """Get details of a specific venue"""
+    # Try to find venue by _id first, then by full id
+    venue = await db.venues.find_one({"_id": venue_id})
+    if not venue:
+        # If not found by _id, try full id
+        venue = await db.venues.find_one({"id": venue_id})
+        if not venue:
+            raise HTTPException(status_code=404, detail="Venue not found")
+    
+    # Get venue's top works
+    works = await db.works.find(
+        {"venue_id": venue_id},
+        {"id": 1, "title": 1, "publication_year": 1, "cited_by_count": 1, "type": 1}
+    ).sort("cited_by_count", DESCENDING).limit(100).to_list(length=None)
+    
+    venue["works"] = works
+    return jsonable_encoder(venue)
+
+@app.get("/publishers",
+    summary="List and search publishers",
+    description="Returns a paginated list of publishers sorted by work count.")
+async def list_publishers(
+    name: Optional[str] = Query(
+        None,
+        description="Filter publishers by name (case-insensitive partial match)",
+        example="Elsevier"
+    ),
+    page: int = Query(
+        1,
+        description="Page number for pagination",
+        gt=0,
+        example=1
+    ),
+    per_page: int = Query(
+        25,
+        description="Number of results per page",
+        gt=0,
+        le=MAX_RESULTS_PER_PAGE,
+        example=25
+    )
+):
+    """List and search publishers"""
+    # Build query
+    query = {}
+    if name:
+        query["display_name"] = {"$regex": name, "$options": "i"}
+    
+    # Execute query with pagination
+    skip = (page - 1) * per_page
+    cursor = db.publishers.find(query).sort("works_count", DESCENDING)
+    
+    # Get total count
+    total_count = await db.publishers.count_documents(query)
+    
+    # Get paginated results
+    results = await cursor.skip(skip).limit(per_page).to_list(per_page)
+    
+    return {
+        "meta": {
+            "count": len(results),
+            "total_count": total_count,
+            "page": page,
+            "per_page": per_page,
+            "total_pages": (total_count + per_page - 1) // per_page
+        },
+        "results": results
+    }
+
+@app.get("/publishers/{publisher_id}")
+async def get_publisher(publisher_id: str):
+    """Get details of a specific publisher"""
+    # Try to find publisher by _id first, then by full id
+    publisher = await db.publishers.find_one({"_id": publisher_id})
+    if not publisher:
+        # If not found by _id, try full id
+        publisher = await db.publishers.find_one({"id": publisher_id})
+        if not publisher:
+            raise HTTPException(status_code=404, detail="Publisher not found")
+    
+    # Get publisher's top works
+    works = await db.works.find(
+        {"publisher_id": publisher_id},
+        {"id": 1, "title": 1, "publication_year": 1, "cited_by_count": 1, "type": 1}
+    ).sort("cited_by_count", DESCENDING).limit(100).to_list(length=None)
+    
+    publisher["works"] = works
+    return jsonable_encoder(publisher)
+
+@app.get("/sources",
+    summary="List and search sources",
+    description="Returns a paginated list of sources sorted by work count.")
+async def list_sources(
+    name: Optional[str] = Query(
+        None,
+        description="Filter sources by name (case-insensitive partial match)",
+        example="arXiv"
+    ),
+    type: Optional[str] = Query(
+        None,
+        description="Filter sources by type",
+        example="repository"
+    ),
+    page: int = Query(
+        1,
+        description="Page number for pagination",
+        gt=0,
+        example=1
+    ),
+    per_page: int = Query(
+        25,
+        description="Number of results per page",
+        gt=0,
+        le=MAX_RESULTS_PER_PAGE,
+        example=25
+    )
+):
+    """List and search sources"""
+    # Build query
+    query = {}
+    if name:
+        query["display_name"] = {"$regex": name, "$options": "i"}
+    if type:
+        query["type"] = type.lower()
+    
+    # Execute query with pagination
+    skip = (page - 1) * per_page
+    cursor = db.sources.find(query).sort("works_count", DESCENDING)
+    
+    # Get total count
+    total_count = await db.sources.count_documents(query)
+    
+    # Get paginated results
+    results = await cursor.skip(skip).limit(per_page).to_list(per_page)
+    
+    return {
+        "meta": {
+            "count": len(results),
+            "total_count": total_count,
+            "page": page,
+            "per_page": per_page,
+            "total_pages": (total_count + per_page - 1) // per_page
+        },
+        "results": results
+    }
+
+@app.get("/sources/{source_id}")
+async def get_source(source_id: str):
+    """Get details of a specific source"""
+    # Try to find source by _id first, then by full id
+    source = await db.sources.find_one({"_id": source_id})
+    if not source:
+        # If not found by _id, try full id
+        source = await db.sources.find_one({"id": source_id})
+        if not source:
+            raise HTTPException(status_code=404, detail="Source not found")
+    
+    # Get source's top works
+    works = await db.works.find(
+        {"source_id": source_id},
+        {"id": 1, "title": 1, "publication_year": 1, "cited_by_count": 1, "type": 1}
+    ).sort("cited_by_count", DESCENDING).limit(100).to_list(length=None)
+    
+    source["works"] = works
+    return jsonable_encoder(source)
 
 
 
