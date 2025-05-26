@@ -222,18 +222,47 @@ def create_all_indexes(db):
         raise
 
 def check_index_progress(db):
-    """Check the progress of ongoing index creation operations."""
+    """Check the progress of ongoing index creation operations and show completed indexes."""
     try:
-        # We need to run currentOp against admin database
+        # First, get all existing indexes
+        logger.info("Checking existing indexes...")
+        existing_indexes = []
+        try:
+            index_info = db.works.index_information()
+            for name, info in index_info.items():
+                key_str = ', '.join(f"{k}: {v}" for k, v in info['key'])
+                existing_indexes.append(f"[{name} ({key_str})]")
+            if existing_indexes:
+                logger.info("Completed indexes:")
+                for idx in sorted(existing_indexes):
+                    logger.info(f"  {idx}")
+            else:
+                logger.info("No completed indexes found")
+        except PyMongoError as e:
+            logger.warning(f"Could not retrieve existing indexes: {e}")
+
+        # Check ongoing index builds
+        logger.info("\nChecking ongoing and queued index builds...")
         admin_db = db.client.admin
-        current_ops = admin_db.command("currentOp")
+        current_ops = admin_db.command("currentOp", {"$all": True})
         found_index_ops = False
         seen_indexes = set()  # Track unique index builds
+        queued_indexes = set()  # Track queued indexes
         
         # Sort operations by namespace and progress percentage for consistent output
         index_builds = []
         for op in current_ops['inprog']:
-            # Look specifically for index operations on our database
+            # Look for both active and queued index operations
+            if op.get('command', {}).get('createIndexes') == 'works':
+                indexes = op.get('command', {}).get('indexes', [])
+                for idx in indexes:
+                    key_str = ', '.join(f"{k}: {v}" for k, v in idx.get('key', {}).items())
+                    index_name = idx.get('name', 'unknown')
+                    if not op.get('msg'):  # If no msg, it's likely queued
+                        queued_indexes.add(f"[{index_name} ({key_str})]")
+                        continue
+
+            # Look specifically for active index operations
             if (op.get('msg') and 'Index Build' in op['msg'] and
                 op.get('ns', '').startswith(db.name + '.')):
                 ns = op.get('ns', 'unknown')
@@ -278,12 +307,20 @@ def check_index_progress(db):
                     index_builds.append((0, 
                             f"Index build on {ns} {index_info} in progress (no progress data available)"))
         
-        # Display progress sorted by completion percentage
-        for _, message in sorted(index_builds, reverse=True):
-            logger.info(message)
+        # Display queued indexes if any
+        if queued_indexes:
+            logger.info("\nQueued indexes:")
+            for idx in sorted(queued_indexes):
+                logger.info(f"  {idx}")
         
-        if not found_index_ops:
-            logger.info("No active index creation operations found")
+        # Display progress sorted by completion percentage
+        if index_builds:
+            logger.info("\nActive index builds:")
+            for _, message in sorted(index_builds, reverse=True):
+                logger.info(f"  {message}")
+        
+        if not found_index_ops and not queued_indexes:
+            logger.info("No active or queued index creation operations found")
             
     except PyMongoError as e:
         logger.error(f"Error checking index progress: {e}")
