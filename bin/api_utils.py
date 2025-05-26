@@ -233,6 +233,16 @@ def entity_list_description(entity_name: str) -> str:
 - Exact match: `filter=display_name.equals:Neural Networks`
 - Multiple values (OR): `filter=publication_year:2020|2021|2022` 
 - Multiple filters (AND): `filter=publication_year:>2018,cited_by_count:>10`
+
+#### Sorting
+- Sort by citation count: `sort=cited_by_count:desc`
+- Sort by publication year: `sort=publication_year:desc` or `sort=publication_year:asc`
+- Sort by name: `sort=display_name:asc`
+- Multiple sort criteria: `sort=publication_year:desc,cited_by_count:desc`
+
+#### Field Selection
+- Select specific fields: `select=id,title,publication_year,cited_by_count`
+- Select fields in nested objects: `select=id,authorships.author.display_name`
 """
 
     work_filter_examples = """
@@ -284,23 +294,37 @@ def entity_list_description(entity_name: str) -> str:
 
 def entity_get_description(entity_name: str) -> str:
     """Generate consistent description for entity detail endpoints"""
-    return f"Get detailed information about a specific {entity_name}."
+    return f"""Get detailed information about a specific {entity_name}.
+    
+#### Field Selection
+You can specify which fields to return using the `select` parameter:
+
+`/{entity_name.lower()}s/W12345?select=id,title,publication_year,cited_by_count`
+
+This will return only the specified fields for the entity."""
 
 
 def entity_search_description(entity_name: str) -> str:
     """Generate consistent description for entity search endpoints"""
     search_description = f"Search {entity_name} using MongoDB text search with relevance ranking."
-    filter_examples = """
-#### Combined with Filters
-You can combine your search query with filters to narrow down results:
+    param_examples = """
+#### Search Parameters
 
+**Filters:** Narrow down search results with filters:
 `/search?q=neural networks&filter=publication_year:>2018,cited_by_count:>100`
 
-This will search for "neural networks" but only return results published after 2018 with over 100 citations.
+**Sorting:** Control the order of results (default is by relevance):
+`/search?q=neural networks&sort=cited_by_count:desc`
+
+**Field Selection:** Control which fields are returned:
+`/search?q=neural networks&select=id,title,publication_year,authorships`
+
+**Combined Example:**
+`/search?q=neural networks&filter=publication_year:>2018&sort=cited_by_count:desc&select=id,title,cited_by_count`
 """
     
     if entity_name in ["works", "authors", "concepts"]:
-        return f"{search_description} {filter_examples}"
+        return f"{search_description} {param_examples}"
     
     return search_description
 

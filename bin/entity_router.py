@@ -64,6 +64,8 @@ class EntityRouter:
         async def list_entities(
             pagination: PaginationParams = Depends(),
             filter: Optional[str] = Query(None, description="OpenAlex-style filter parameter. Examples: 'publication_year:2020', 'cited_by_count:>100'"),
+            sort: Optional[str] = Query(None, description="Sort parameter. Examples: 'cited_by_count:desc', 'publication_year:asc'"),
+            select: Optional[str] = Query(None, description="Fields to return. Examples: 'id,title,publication_year'"),
             filters: Any = Depends(self.filter_params_class) if self.filter_params_class else None
         ):
             """List and filter entities with pagination"""
@@ -103,6 +105,8 @@ class EntityRouter:
                 per_page=pagination.per_page,
                 sort_field=self.sort_field,
                 filter_param=filter,
+                sort_param=sort,
+                select_param=select,
                 extra_filters=extra_filters
             )
 
@@ -112,9 +116,12 @@ class EntityRouter:
             summary=f"Get {self.entity_name_singular} details",
             description=entity_get_description(self.entity_name_singular)
         )
-        async def get_entity(entity_id: str = Path(..., description=f"The ID of the {self.entity_name_singular} to retrieve")):
+        async def get_entity(
+            entity_id: str = Path(..., description=f"The ID of the {self.entity_name_singular} to retrieve"),
+            select: Optional[str] = Query(None, description="Fields to return. Examples: 'id,title,publication_year'")
+        ):
             """Get a specific entity by ID with related entities"""
-            entity = await self.handlers[self.entity_type].get_entity(entity_id)
+            entity = await self.handlers[self.entity_type].get_entity(entity_id, select)
             
             # Add related entities if specified
             if 'works' in self.related_entities:
@@ -160,7 +167,9 @@ class EntityRouter:
             )
             async def search_entities(
                 search_params: SearchParams = Depends(),
-                filter: Optional[str] = Query(None, description="OpenAlex-style filter parameter")
+                filter: Optional[str] = Query(None, description="OpenAlex-style filter parameter"),
+                sort: Optional[str] = Query(None, description="Sort parameter (defaults to relevance score)"),
+                select: Optional[str] = Query(None, description="Fields to return")
             ):
                 """Search entities using MongoDB text search"""
                 # Custom search handler for works
@@ -171,7 +180,9 @@ class EntityRouter:
                         search_params.limit, 
                         search_params.explain_score,
                         None,  # Don't parse the filter here, pass it as string
-                        filter
+                        filter,
+                        sort,
+                        select
                     )
                 else:
                     # Generic search for other entity types
@@ -182,8 +193,31 @@ class EntityRouter:
                         search_params.skip,
                         search_params.limit,
                         search_params.explain_score,
-                        filter_query
+                        filter_query,
+                        None,  # Use default projection
+                        sort,
+                        select
                     )
+
+        # 4. Group by endpoint (for analytics)
+        @self.router.get(
+            f"/{self.entity_name_plural}/group_by/{{field}}",
+            summary=f"Group {self.entity_name_plural} by a field",
+            description=f"Group {self.entity_name_plural} by a field and return counts. Useful for analytics."
+        )
+        async def group_entities(
+            field: str = Path(..., description="The field to group by"),
+            filter: Optional[str] = Query(None, description="OpenAlex-style filter parameter to filter the entities before grouping")
+        ):
+            """Group entities by a field and return counts"""
+            # Process any traditional filters
+            extra_filters = {}
+            
+            return await self.handlers[self.entity_type].group_entities(
+                group_by=field,
+                filter_param=filter,
+                extra_filters=extra_filters
+            )
 
 
 def create_entity_routers(app, db, handlers, jsonable_encoder):

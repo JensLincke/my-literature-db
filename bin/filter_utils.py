@@ -1,8 +1,8 @@
 """
-Filter utilities for the OpenAlex Local API
+Filter, sort, and select utilities for the OpenAlex Local API
 
-This module provides filter parsing utilities for the API that mimic
-the filtering functionality of the official OpenAlex API.
+This module provides utilities for the API that mimic
+the functionality of the official OpenAlex API.
 
 Filter syntax examples:
 - filter=publication_year:2020
@@ -11,6 +11,15 @@ Filter syntax examples:
 - filter=cited_by_count:>100
 - filter=display_name.search:neural+networks
 - filter=institutions.country_code:us
+
+Sort syntax:
+- sort=cited_by_count:desc
+- sort=publication_year:asc
+- sort=relevance_score:desc
+
+Select syntax:
+- select=id,title,publication_year
+- select=id,authorships
 """
 
 from typing import Dict, Any, List, Optional, Tuple
@@ -27,6 +36,26 @@ FILTER_OPERATIONS = {
     "!=": "ne",  # Not equal
     ".search:": "search",  # Text search (regex)
     ".equals:": "exact"  # Exact match
+}
+
+# Default sort fields for each entity type
+DEFAULT_SORT_FIELDS = {
+    "works": "cited_by_count",
+    "authors": "works_count", 
+    "concepts": "works_count",
+    "institutions": "works_count",
+    "publishers": "works_count",
+    "sources": "works_count",
+    "topics": "works_count",
+    "fields": "works_count",
+    "subfields": "works_count",
+    "domains": "works_count"
+}
+
+# Sort directions
+SORT_DIRECTIONS = {
+    "asc": 1,  # MongoDB ascending
+    "desc": -1  # MongoDB descending
 }
 
 # Filter type mapping (to convert string values to appropriate types)
@@ -295,3 +324,100 @@ def parse_filter_param(filter_param: Optional[str]) -> Dict:
             query = {"$and": and_conditions}
     
     return query
+
+def parse_sort_param(sort_param: Optional[str], entity_type: str = "works") -> List[Tuple[str, int]]:
+    """
+    Parse the sort parameter into a list of sort fields and directions.
+    
+    Example: "cited_by_count:desc" -> [("cited_by_count", -1)]
+    
+    If no sort parameter is provided, returns a default sort based on the entity type.
+    """
+    if not sort_param:
+        # Use default sort field for this entity type
+        default_field = DEFAULT_SORT_FIELDS.get(entity_type, "works_count")
+        return [(default_field, -1)]  # Default to descending order
+    
+    sort_specs = []
+    # Split by comma for multiple sort fields
+    for sort_spec in sort_param.split(','):
+        if ':' in sort_spec:
+            field, direction = sort_spec.split(':', 1)
+            direction = direction.lower()
+            # Convert direction to MongoDB sort value (1 or -1)
+            mongo_direction = SORT_DIRECTIONS.get(direction, -1)  # Default to descending if invalid
+        else:
+            # If no direction specified, default to descending
+            field = sort_spec
+            mongo_direction = -1
+        
+        # Special case for "relevance_score" which uses textScore in MongoDB
+        if field == "relevance_score":
+            # This will be handled specially in the calling function
+            sort_specs.append(("score", "textScore"))
+        else:
+            sort_specs.append((field, mongo_direction))
+    
+    return sort_specs
+
+def parse_select_param(select_param: Optional[str]) -> Dict[str, int]:
+    """
+    Parse the select parameter into a MongoDB projection.
+    
+    Example: "id,title,publication_year" -> {"id": 1, "title": 1, "publication_year": 1}
+    
+    If no select parameter is provided, returns an empty dict (no projection).
+    """
+    if not select_param:
+        return {}
+    
+    # Split by comma for multiple fields
+    fields = [f.strip() for f in select_param.split(',') if f.strip()]
+    
+    # Create projection
+    projection = {}
+    for field in fields:
+        projection[field] = 1
+    
+    # Always include _id for MongoDB
+    if "_id" not in projection:
+        projection["_id"] = 1
+        
+    return projection
+
+def parse_group_by_param(group_by_param: Optional[str]) -> Dict:
+    """
+    Parse the group-by parameter to create MongoDB aggregation pipeline.
+    
+    Example: "publication_year" -> Group results by publication year
+    
+    Returns a MongoDB aggregation spec.
+    """
+    if not group_by_param:
+        return {}
+        
+    # Get the field to group by
+    group_field = group_by_param.strip()
+    
+    # Create the MongoDB aggregation pipeline
+    pipeline = [
+        {
+            "$group": {
+                "_id": f"${group_field}",
+                "count": {"$sum": 1},
+                "key": {"$first": f"${group_field}"}
+            }
+        },
+        {
+            "$project": {
+                "_id": 0,
+                "key": 1,
+                "count": 1
+            }
+        },
+        {
+            "$sort": {"count": -1}
+        }
+    ]
+    
+    return pipeline

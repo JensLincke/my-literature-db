@@ -1,11 +1,11 @@
 """Base handlers for OpenAlex API endpoints"""
 
-from typing import Optional, Any, Dict, List
+from typing import Optional, Any, Dict, List, Tuple
 from fastapi import HTTPException, Query
 from motor.motor_asyncio import AsyncIOMotorCollection
 from pymongo import DESCENDING
 
-from filter_utils import parse_filter_param
+from filter_utils import parse_filter_param, parse_sort_param, parse_select_param, parse_group_by_param
 
 class BaseEntityHandler:
     """Base handler for all entity types (works, authors, concepts, etc.)"""
@@ -21,6 +21,8 @@ class BaseEntityHandler:
         per_page: int = 25,
         sort_field: str = "works_count",
         filter_param: Optional[str] = None,
+        sort_param: Optional[str] = None,
+        select_param: Optional[str] = None,
         extra_filters: Dict = None
     ) -> Dict[str, Any]:
         """Generic method for listing entities with pagination"""
@@ -37,8 +39,37 @@ class BaseEntityHandler:
         if extra_filters:
             query.update(extra_filters)
         
+        # Parse sorting parameters
+        sort_specs = parse_sort_param(sort_param, self.entity_name)
+        
+        # Create sort list for MongoDB
+        sort_list = []
+        for field, direction in sort_specs:
+            if field == "score" and direction == "textScore":
+                # Skip textScore sorting here, only applicable in text search
+                continue
+            elif field == "relevance_score":
+                # Skip relevance_score here too, only applicable in text search
+                continue
+            else:
+                sort_list.append((field, direction))
+                
+        # If no valid sort fields, use default
+        if not sort_list:
+            sort_list = [(sort_field, DESCENDING)]
+            
+        # Handle field selection
+        projection = parse_select_param(select_param)
+            
         skip = (page - 1) * per_page
-        cursor = self.collection.find(query).sort(sort_field, DESCENDING)
+        
+        # Apply query with sort and projection
+        cursor = self.collection.find(query, projection)
+        
+        # Apply sorting
+        if sort_list:
+            # Convert to MongoDB sort format
+            cursor = cursor.sort(sort_list)
         
         total_count = await self.collection.count_documents(query)
         results = await cursor.skip(skip).limit(per_page).to_list(per_page)
@@ -54,11 +85,15 @@ class BaseEntityHandler:
             "results": results
         }
 
-    async def get_entity(self, entity_id: str) -> Dict[str, Any]:
+    async def get_entity(self, entity_id: str, select_param: Optional[str] = None) -> Dict[str, Any]:
         """Generic method for getting a single entity by ID"""
-        entity = await self.collection.find_one({"_id": entity_id})
+        # Handle field selection
+        projection = parse_select_param(select_param)
+        
+        # Check both _id and id fields for the entity
+        entity = await self.collection.find_one({"_id": entity_id}, projection)
         if not entity:
-            entity = await self.collection.find_one({"id": entity_id})
+            entity = await self.collection.find_one({"id": entity_id}, projection)
             if not entity:
                 raise HTTPException(
                     status_code=404, 
@@ -73,7 +108,9 @@ class BaseEntityHandler:
         limit: int = 10,
         explain_score: bool = False,
         filter_query: Dict = None,
-        projection: Dict = None
+        projection: Dict = None,
+        sort_param: Optional[str] = None,
+        select_param: Optional[str] = None
     ) -> Dict[str, Any]:
         """Generic method for text search across entities"""
         try:
@@ -85,17 +122,53 @@ class BaseEntityHandler:
                 # Combine text search with filter using $and
                 search_query = {"$and": [search_query, filter_query]}
             
+            # Start with default projection if none provided
             if not projection:
                 projection = {
                     "score": {"$meta": "textScore"},
                     "display_name": 1,
                     "works_count": 1,
                 }
-
-            cursor = self.collection.find(
-                search_query,
-                projection
-            ).sort([("score", {"$meta": "textScore"})])
+            
+            # Override with select parameter if provided
+            if select_param:
+                user_projection = parse_select_param(select_param)
+                # Always include score for sorting by relevance
+                user_projection["score"] = {"$meta": "textScore"}
+                projection = user_projection
+            
+            # Parse sorting parameters
+            sort_specs = parse_sort_param(sort_param, self.entity_name) if sort_param else []
+            
+            # Handle MongoDB's text score sorting
+            # When no sort is specified, default to text score
+            if not sort_param or "relevance_score" in sort_param:
+                # MongoDB requires special handling for textScore sorting
+                cursor = self.collection.find(
+                    search_query,
+                    projection
+                ).sort([("score", {"$meta": "textScore"})])
+                
+                # Add any additional sort fields if specified
+                for field, direction in sort_specs:
+                    if field != "score" and field != "relevance_score":  # Skip the text score field
+                        if isinstance(direction, int):
+                            cursor = cursor.sort(field, direction)
+            else:
+                # Regular sorting without text score
+                sort_list = []
+                for field, direction in sort_specs:
+                    if isinstance(direction, int):
+                        sort_list.append((field, direction))
+                
+                # If no valid sort fields, use default
+                if not sort_list:
+                    sort_list = [("score", {"$meta": "textScore"})]
+                    
+                cursor = self.collection.find(
+                    search_query,
+                    projection
+                ).sort(sort_list)
             
             total = await self.collection.count_documents(search_query)
             
@@ -130,6 +203,51 @@ class BaseEntityHandler:
                 detail=f"Text search is not available - the search index is still being built. Error: {str(e)}"
             )
 
+    async def group_entities(
+        self,
+        group_by: str,
+        filter_param: Optional[str] = None,
+        extra_filters: Dict = None
+    ) -> Dict[str, Any]:
+        """Group entities by a specified field and return counts"""
+        query = {}
+        
+        # Add OpenAlex-style filter if provided
+        if filter_param:
+            filter_query = parse_filter_param(filter_param)
+            query.update(filter_query)
+            
+        # Add traditional filters if provided
+        if extra_filters:
+            query.update(extra_filters)
+            
+        # Get the aggregation pipeline
+        pipeline = parse_group_by_param(group_by)
+        
+        # Add match stage at the beginning if there are filters
+        if query:
+            pipeline.insert(0, {"$match": query})
+            
+        # Run the aggregation
+        results = await self.collection.aggregate(pipeline).to_list(length=None)
+        
+        # Count total unique values
+        total_groups = len(results)
+        
+        return {
+            "meta": {
+                "count": total_groups,
+                "group_by": group_by
+            },
+            "group_by": [
+                {
+                    "key": result.get("key"),
+                    "count": result.get("count")
+                }
+                for result in results
+            ]
+        }
+
 class WorksHandler(BaseEntityHandler):
     """Handler for academic works"""
     
@@ -139,7 +257,9 @@ class WorksHandler(BaseEntityHandler):
         year: Optional[int] = None,
         type: Optional[str] = None,
         per_page: int = 25,
-        filter: Optional[str] = None
+        filter: Optional[str] = None,
+        sort: Optional[str] = None,
+        select: Optional[str] = None
     ):
         extra_filters = {}
         if title:
@@ -153,6 +273,8 @@ class WorksHandler(BaseEntityHandler):
             per_page=per_page,
             sort_field="cited_by_count",
             filter_param=filter,
+            sort_param=sort,
+            select_param=select,
             extra_filters=extra_filters
         )
 
@@ -163,12 +285,15 @@ class WorksHandler(BaseEntityHandler):
         limit: int = 10, 
         explain_score: bool = False,
         filter_query: Dict = None,
-        filter_param: Optional[str] = None
+        filter_param: Optional[str] = None,
+        sort_param: Optional[str] = None,
+        select_param: Optional[str] = None
     ):
         # If we received a filter parameter string, parse it
         if filter_param and not filter_query:
             filter_query = parse_filter_param(filter_param)
-            
+        
+        # Default projection for works search
         projection = {
             "score": {"$meta": "textScore"},
             "title": 1,
@@ -177,6 +302,13 @@ class WorksHandler(BaseEntityHandler):
             "type": 1,
             "_citation_key": 1
         }
+        
+        # Override with select parameter if provided
+        if select_param:
+            user_projection = parse_select_param(select_param)
+            # Always include score for sorting by relevance
+            user_projection["score"] = {"$meta": "textScore"}
+            projection = user_projection
         
         if explain_score:
             projection["search_blob"] = 1
@@ -187,7 +319,9 @@ class WorksHandler(BaseEntityHandler):
             limit, 
             explain_score, 
             filter_query, 
-            projection
+            projection,
+            sort_param,
+            select_param
         )
         
         if explain_score and result.get("results"):
