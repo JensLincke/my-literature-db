@@ -110,8 +110,7 @@ async def get_root():
             {"path": "/authors", "description": "List and search authors"},
             {"path": "/authors/{id}", "description": "Get details of a specific author"},
             {"path": "/concepts", "description": "List and search concepts"},
-            {"path": "/concepts/{id}", "description": "Get details of a specific concept"},
-            {"path": "/search", "description": "Search across all entities"}
+            {"path": "/concepts/{id}", "description": "Get details of a specific concept"}
         ]
     }
     return api_info
@@ -339,7 +338,7 @@ async def search_works(
         
         if explain_score:
             projection["search_blob"] = 1
-        
+        wgh
         cursor = db.works.find(
             search_query,
             projection
@@ -585,96 +584,6 @@ async def get_concept(concept_id: str):
     concept["works"] = works
     return jsonable_encoder(concept)
 
-@app.get("/search",
-    summary="Search across all entities",
-    description="""
-    Performs a global search across works, authors, and concepts.
-    Results are sorted by citation count (for works and authors) or work count (for concepts).
-    Returns a mixed list of entities, each with an entity_type field indicating the type ('work', 'author', or 'concept').
-    """)
-async def search(
-    q: str = Query(
-        ...,
-        description="Search query string (searches titles, abstracts, names)",
-        example="machine learning"
-    ),
-    page: int = Query(
-        1,
-        description="Page number for pagination",
-        gt=0,
-        example=1
-    ),
-    per_page: int = Query(
-        25,
-        description="Number of results per page",
-        gt=0,
-        le=MAX_RESULTS_PER_PAGE,
-        example=25
-    )
-):
-    """Search across all entities"""
-    skip = (page - 1) * per_page
-    
-    # Search in works
-    works = await db.works.find({
-        "$or": [
-            {"title": {"$regex": q, "$options": "i"}},
-            {"abstract": {"$regex": q, "$options": "i"}}
-        ]
-    }, {
-        "id": 1,
-        "title": 1,
-        "publication_year": 1,
-        "type": 1,
-        "cited_by_count": 1
-    }).sort("cited_by_count", DESCENDING).limit(per_page).to_list(length=None)
-    
-    for work in works:
-        work["entity_type"] = "work"
-    
-    # Search in authors
-    authors = await db.authors.find({
-        "display_name": {"$regex": q, "$options": "i"}
-    }, {
-        "id": 1,
-        "display_name": 1,
-        "cited_by_count": 1
-    }).sort("cited_by_count", DESCENDING).limit(per_page).to_list(length=None)
-    
-    for author in authors:
-        author["entity_type"] = "author"
-    
-    # Search in concepts
-    concepts = await db.concepts.find({
-        "display_name": {"$regex": q, "$options": "i"}
-    }, {
-        "id": 1,
-        "display_name": 1,
-        "level": 1,
-        "works_count": 1
-    }).sort("works_count", DESCENDING).limit(per_page).to_list(length=None)
-    
-    for concept in concepts:
-        concept["entity_type"] = "concept"
-    
-    # Combine and sort results
-    all_results = works + authors + concepts
-    all_results.sort(
-        key=lambda x: x.get("cited_by_count", 0) if "cited_by_count" in x else x.get("works_count", 0),
-        reverse=True
-    )
-    
-    # Convert MongoDB documents to JSON-serializable objects
-    all_results = jsonable_encoder(all_results)
-    
-    return {
-        "meta": {
-            "query": q,
-            "count": len(all_results),
-            "page": page,
-            "per_page": per_page
-        },
-        "results": all_results[skip:skip + per_page]
-    }
+
 
 
