@@ -325,42 +325,57 @@ async def search_works(
     - Use quotes for exact phrases (e.g. "John Smith" or "machine learning")
     - Returns results sorted by relevance
     """
-    # First check if we have any documents with search_blob field
-    sample_doc = await db.works.find_one({"search_blob": {"$exists": True}})
-    if not sample_doc:
-        raise HTTPException(
-            status_code=500,
-            detail="Search index not built. Please run update_openalex_index.py first."
-        )
+    # Try direct text search first
+    try:
+        search_query = {"$text": {"$search": q}}
+        projection = {
+            "score": {"$meta": "textScore"},
+            "title": 1,
+            "publication_year": 1,
+            "authorships": 1,
+            "type": 1,
+            "_citation_key": 1
+        }
+        
+        if explain_score:
+            projection["search_blob"] = 1
+        
+        cursor = db.works.find(
+            search_query,
+            projection
+        ).sort([("score", {"$meta": "textScore"})])
+        
+        # Get total count
+        total = await db.works.count_documents(search_query)
+        
+        if total == 0:
+            # If no results with text search, fallback to regex search
+            regex_query = {
+                "$or": [
+                    {"title": {"$regex": q, "$options": "i"}},
+                    {"search_blob": {"$regex": q, "$options": "i"}}
+                ]
+            }
+            cursor = db.works.find(regex_query).sort("cited_by_count", DESCENDING)
+            total = await db.works.count_documents(regex_query)
+    except Exception as e:
+        # If text search fails (e.g., no index), fallback to regex search
+        regex_query = {
+            "$or": [
+                {"title": {"$regex": q, "$options": "i"}},
+                {"search_blob": {"$regex": q, "$options": "i"}}
+            ]
+        }
+        cursor = db.works.find(regex_query).sort("cited_by_count", DESCENDING)
+        total = await db.works.count_documents(regex_query)
 
-    search_query = {"$text": {"$search": q}}
-    projection = {
-        "score": {"$meta": "textScore"},
-        "title": 1,
-        "publication_year": 1,
-        "authorships": 1,
-        "type": 1,
-        "_citation_key": 1
-    }
-    
-    if explain_score:
-        projection["search_blob"] = 1
-    
-    cursor = db.works.find(
-        search_query,
-        projection
-    ).sort([("score", {"$meta": "textScore"})])
-    
-    # Get total count
-    total = await db.works.count_documents(search_query)
-    
     if total == 0:
         return {
             "total": 0,
             "skip": skip,
             "limit": limit,
             "results": [],
-            "message": "No matching documents found. Try different search terms or check if the text index is built."
+            "message": "No matching documents found. Try different search terms."
         }
     
     # Apply pagination
