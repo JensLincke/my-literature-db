@@ -111,43 +111,48 @@ def generate_citation_key(work: dict) -> Optional[str]:
         authorships = work.get('authorships', [])
         if not authorships or not work.get('publication_year'):
             return None
-        
+
         first_author = authorships[0].get('author', {}).get('display_name', '')
-        if not first_author:
+        if not first_author or not first_author.strip():
             return None
-        
+
         # Process author name
         if ',' in first_author:
             last_name = first_author.split(',')[0]
         else:
-            last_name = first_author.split()[-1]
-        
+            last_name_parts = first_author.split()
+            if not last_name_parts:
+                return None
+            last_name = last_name_parts[-1]
+
         # Clean and normalize last name
         last_name = fix_umlauts(last_name)
         clean_last_name = re.sub(r'[ \-\']', '', last_name)
+        if not clean_last_name:
+            return None
         normalized_last_name = clean_last_name[0].upper() + clean_last_name[1:].lower()
-        
+
         # Get year and title initials
         year = str(work.get('publication_year'))
         title_initials = get_significant_initials(work.get('title', ''))
-        
+
         if not title_initials:
             return None
-            
+
         return f"{normalized_last_name}{year}{title_initials}"
-        
+
     except Exception as e:
         logger.warning(f"Error generating citation key: {str(e)}")
         return None
 
-async def update_works_index(db, limit: Optional[int] = None, batch_size: int = 1000) -> None:
+async def update_works_index(db, limit: Optional[int] = None, batch_size: int = 1000, force: bool = False) -> None:
     """Update works collection with citation keys and indexes"""
     try:
         # Check and create necessary indexes if they don't exist
         indexes = await db.works.list_indexes().to_list(None)
         existing_indexes = {idx['name'] for idx in indexes}
         logger.info(f"Found existing indexes: {existing_indexes}")
-        
+
         # Create text index on search_blob if it doesn't exist
         if 'search_blob_text' not in existing_indexes:
             logger.info("Creating text index on search_blob (this may take a while)...")
@@ -161,11 +166,7 @@ async def update_works_index(db, limit: Optional[int] = None, batch_size: int = 
             )
             duration = datetime.now() - start_time
             logger.info(f"Text index creation completed in {duration}")
-            # Check if index was actually created
-            indexes = await db.works.list_indexes().to_list(None)
-            if any(idx.get('name') == 'search_blob_text' for idx in indexes):
-                logger.info("Text index verified and ready to use")
-            
+
         # MongoDB automatically names indexes as fieldname_direction (e.g. field_1 for ascending)
         required_indexes = [
             ("_citation_key", ASCENDING),
@@ -174,41 +175,55 @@ async def update_works_index(db, limit: Optional[int] = None, batch_size: int = 
             ("_author_ids", ASCENDING),
             ("_concept_ids", ASCENDING)
         ]
-        
+
         for field, direction in required_indexes:
             index_name = f"{field}_1"
             if index_name not in existing_indexes:
                 logger.info(f"Creating {field} index in background...")
                 await db.works.create_index([(field, direction)], background=True)
-                
+
         # Process works in batches
         updates = []
         processed = 0
-        
+        skipped = 0
+
         # Build find query for works that need updating
-        find_query = {"$or": [
-            {"_citation_key": {"$exists": False}},
-            {"_citation_key": None},
-            {"search_blob": {"$exists": False}}  # Also update works missing search_blob
-        ]}
-        
+        find_query = {
+            "$or": [
+                {"_citation_key": {"$exists": False}},
+                {"_citation_key": None},
+                {"search_blob": {"$exists": False}},
+                {"search_blob": None}
+            ]
+        }
+
+        # Add projection to limit retrieved fields
+        projection = {
+            "_id": 1,
+            "authorships": 1,
+            "publication_year": 1,
+            "title": 1,
+            "_citation_key": 1,
+            "search_blob": 1
+        }
+
         # Get estimated count for progress reporting
         try:
-            total_estimate = await db.works.estimated_document_count()
-            logger.info(f"Estimated total documents: {total_estimate}")
+            total_estimate = await db.works.count_documents(find_query)
+            logger.info(f"Estimated documents needing updates: {total_estimate}")
         except Exception as e:
             logger.warning(f"Could not get document count estimate: {e}")
             total_estimate = None
-        
-        cursor = db.works.find(find_query)
+
+        cursor = db.works.find(find_query, projection)
         if limit:
             cursor = cursor.limit(limit)
             total_estimate = limit
-            
+
         async for work in cursor:
             # Generate citation key
             citation_key = generate_citation_key(work)
-            
+
             # Create search blob combining all relevant fields
             author_names = " ".join(
                 auth.get("author", {}).get("display_name", "")
@@ -216,45 +231,52 @@ async def update_works_index(db, limit: Optional[int] = None, batch_size: int = 
             )
             year = str(work.get("publication_year", ""))
             title = work.get("title", "")
-            
+
             # Combine fields with extra spaces to prevent unwanted word combinations
             search_blob = f"{author_names} {year} {title}"
-            
+
             # Create update operation
-            update = {
-                "$set": {
-                    "search_blob": search_blob
-                }
-            }
-            if citation_key:
-                update["$set"]["_citation_key"] = citation_key
-                
-            updates.append(UpdateOne(
-                {"_id": work["_id"]},
-                update
-            ))
-            
+            update = {"$set": {}}
+            if force or not work.get("_citation_key"):
+                if citation_key:
+                    update["$set"]["_citation_key"] = citation_key
+            if force or not work.get("search_blob"):
+                update["$set"]["search_blob"] = search_blob
+
+            if update["$set"]:
+                updates.append(UpdateOne(
+                    {"_id": work["_id"]},
+                    update
+                ))
+            else:
+                skipped += 1
+
+            processed += 1
+            if processed % 10000 == 0:  # Log progress every x documents
+                percentage = ((processed + skipped) / total_estimate) * 100 if total_estimate else 0
+                logger.info(f"Processed {processed} works, skipped {skipped} works so far. Progress: {percentage:.2f}%")
+
             if len(updates) >= batch_size:
                 result = await db.works.bulk_write(updates)
-                processed += len(updates)
+                logger.info(f"Batch update completed. Processed {len(updates)} updates.")
+                updates = []
+
                 if total_estimate:
-                    logger.info(f"Processed {processed}/{total_estimate} works ({(processed/total_estimate)*100:.1f}%)")
+                    logger.info(f"Progress: {processed + skipped}/{total_estimate} ({((processed + skipped)/total_estimate)*100:.1f}%)")
                 else:
-                    logger.info(f"Processed {processed} works")
-                
+                    logger.info(f"Processed {processed} works, skipped {skipped} works.")
+
                 # Check if we've hit the limit
                 if limit and processed >= limit:
                     break
-                    
-                updates = []
-        
+
         # Process remaining updates
         if updates:
             result = await db.works.bulk_write(updates)
             processed += len(updates)
-            
-        logger.info(f"Completed processing {processed} works")
-        
+
+        logger.info(f"Completed processing {processed} works, skipped {skipped} works.")
+
     except PyMongoError as e:
         logger.error(f"MongoDB error: {str(e)}")
         raise
@@ -303,7 +325,7 @@ def create_all_indexes(db):
                                  default_language="english",
                                  language_override="no_language")
             
-        elif entity_type == "authors":z
+        elif entity_type == "authors":
             collection.create_index([("last_known_institution.id", ASCENDING)], background=True)
             collection.create_index([("x_concepts.id", ASCENDING)], background=True)
             collection.create_index([("ids.orcid", ASCENDING)], background=True)
