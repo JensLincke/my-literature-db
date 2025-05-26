@@ -63,6 +63,9 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    allow_origin_regex=None,
+    expose_headers=["*"],
+    max_age=600,
 )
 
 # Override FastAPI's default JSON encoder
@@ -304,6 +307,89 @@ async def list_works(
             response["meta"]["total_count"] = total_count
 
         return response
+
+@app.get("/works/search")
+async def search_works(
+    q: str = Query(
+        ..., 
+        description="Search query. Enter terms in any order (e.g. 'John Smith 2023 machine learning') or use quotes for exact phrases"
+    ),
+    skip: int = Query(0, ge=0),
+    limit: int = Query(10, ge=1, le=100),
+    explain_score: bool = Query(False, description="Include explanation of search score")
+):
+    """
+    Search works using MongoDB text search. Features:
+    - Natural language search through combined field of authors, year, and title
+    - Order of terms doesn't matter
+    - Use quotes for exact phrases (e.g. "John Smith" or "machine learning")
+    - Returns results sorted by relevance
+    """
+    # First check if we have any documents with search_blob field
+    sample_doc = await db.works.find_one({"search_blob": {"$exists": True}})
+    if not sample_doc:
+        raise HTTPException(
+            status_code=500,
+            detail="Search index not built. Please run update_openalex_index.py first."
+        )
+
+    search_query = {"$text": {"$search": q}}
+    projection = {
+        "score": {"$meta": "textScore"},
+        "title": 1,
+        "publication_year": 1,
+        "authorships": 1,
+        "type": 1,
+        "_citation_key": 1
+    }
+    
+    if explain_score:
+        projection["search_blob"] = 1
+    
+    cursor = db.works.find(
+        search_query,
+        projection
+    ).sort([("score", {"$meta": "textScore"})])
+    
+    # Get total count
+    total = await db.works.count_documents(search_query)
+    
+    if total == 0:
+        return {
+            "total": 0,
+            "skip": skip,
+            "limit": limit,
+            "results": [],
+            "message": "No matching documents found. Try different search terms or check if the text index is built."
+        }
+    
+    # Apply pagination
+    documents = await cursor.skip(skip).limit(limit).to_list(None)
+    
+    if explain_score:
+        # Enhance results with match explanation
+        for doc in documents:
+            score = doc.get("score", 0)
+            search_blob = doc.get("search_blob", "").lower()
+            terms = [t.strip('"').lower() for t in q.split()]
+            
+            # Find which terms matched in the search blob
+            matches = [term for term in terms if term in search_blob]
+            
+            doc["_score_explanation"] = {
+                "score": score,
+                "matching_terms": matches,
+                "search_blob": search_blob  # Include for transparency
+            }
+            # Remove search_blob from final output
+            doc.pop("search_blob", None)
+    
+    return {
+        "total": total,
+        "skip": skip,
+        "limit": limit,
+        "results": documents
+    }
 
 @app.get("/works/{work_id}")
 async def get_work(work_id: str):
@@ -574,72 +660,6 @@ async def search(
             "per_page": per_page
         },
         "results": all_results[skip:skip + per_page]
-    }
-
-@app.get("/works/search")
-async def search_works(
-    q: str = Query(
-        ..., 
-        description="Search query. Enter terms in any order (e.g. 'John Smith 2023 machine learning') or use quotes for exact phrases"
-    ),
-    skip: int = Query(0, ge=0),
-    limit: int = Query(10, ge=1, le=100),
-    explain_score: bool = Query(False, description="Include explanation of search score")
-):
-    """
-    Search works using MongoDB text search. Features:
-    - Natural language search through combined field of authors, year, and title
-    - Order of terms doesn't matter
-    - Use quotes for exact phrases (e.g. "John Smith" or "machine learning")
-    - Returns results sorted by relevance
-    """
-    search_query = {"$text": {"$search": q}}
-    projection = {
-        "score": {"$meta": "textScore"},
-        "title": 1,
-        "publication_year": 1,
-        "authorships": 1,
-        "type": 1,
-        "_citation_key": 1
-    }
-    
-    if explain_score:
-        projection["search_blob"] = 1
-    
-    cursor = db.works.find(
-        search_query,
-        projection
-    ).sort([("score", {"$meta": "textScore"})])
-    
-    # Get total count
-    total = await db.works.count_documents(search_query)
-    
-    # Apply pagination
-    documents = await cursor.skip(skip).limit(limit).to_list(None)
-    
-    if explain_score:
-        # Enhance results with match explanation
-        for doc in documents:
-            score = doc.get("score", 0)
-            search_blob = doc.get("search_blob", "").lower()
-            terms = [t.strip('"').lower() for t in q.split()]
-            
-            # Find which terms matched in the search blob
-            matches = [term for term in terms if term in search_blob]
-            
-            doc["_score_explanation"] = {
-                "score": score,
-                "matching_terms": matches,
-                "search_blob": search_blob  # Include for transparency
-            }
-            # Remove search_blob from final output
-            doc.pop("search_blob", None)
-    
-    return {
-        "total": total,
-        "skip": skip,
-        "limit": limit,
-        "results": documents
     }
 
 
