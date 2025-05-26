@@ -343,34 +343,38 @@ def get_collection_stats(db):
     for collection_name in ENTITY_TYPES:
         collection = db[collection_name]
         try:
-            # Get document count
-            count = collection.count_documents({})
-            # Get the latest update date
-            latest_doc = collection.find_one(
-                {"_update_date": {"$exists": True}},
-                sort=[("_update_date", -1)]
-            )
-            latest_date = latest_doc.get("_update_date") if latest_doc else None
+            # Use collStats command which is much faster than count_documents
+            coll_stats = db.command("collStats", collection_name, scale=1024*1024)  # Get stats in MB
+            
+            # Get estimated document count (much faster than exact count)
+            count = coll_stats.get("count", 0)
+            
+            # Get the latest update date with a timeout and a simpler query
+            try:
+                latest_doc = collection.find(
+                    {"_update_date": {"$exists": True}},
+                    {"_update_date": 1}
+                ).sort("_update_date", -1).limit(1).max_time_ms(1000).next()
+                latest_date = latest_doc.get("_update_date")
+            except Exception as e:
+                logger.debug(f"Could not get latest update date for {collection_name}: {e}")
+                latest_date = "Unknown (collection too large)"
             
             stats[collection_name] = {
                 "count": count,
-                "latest_update": latest_date
-            }
-        except (KeyError, AttributeError) as e:
-            # Handle specific errors related to missing fields or invalid data
-            logger.warning(f"Data error getting stats for {collection_name}: {str(e)}")
-            stats[collection_name] = {
-                "count": count if 'count' in locals() else 0,
-                "latest_update": None,
-                "error": f"Data error: {str(e)}"
+                "latest_update": latest_date,
+                "size_mb": round(coll_stats.get("size", 0), 2),
+                "has_indexes": bool(coll_stats.get("nindexes", 0))
             }
         except Exception as e:
-            # Handle other unexpected errors
-            logger.error(f"Unexpected error getting stats for {collection_name}: {str(e)}")
+            # Handle any errors
+            logger.warning(f"Error getting stats for {collection_name}: {str(e)}")
             stats[collection_name] = {
-                "count": count if 'count' in locals() else 0,
+                "count": 0,
                 "latest_update": None,
-                "error": f"Unexpected error: {str(e)}"
+                "size_mb": 0,
+                "has_indexes": False,
+                "error": str(e)
             }
     return stats
 
@@ -380,13 +384,17 @@ def print_database_status(db):
     
     print("\nDatabase contents:")
     print("-------------------------")
-    total = 0
+    total_docs = 0
+    total_size = 0
     for entity, entity_stats in stats.items():
         count = entity_stats["count"]
         latest_update = entity_stats["latest_update"] or "No data"
-        print(f"{entity.title()}: {count:,} documents (Latest update: {latest_update})")
-        total += count
-    print(f"\nTotal: {total:,} documents")
+        size_mb = entity_stats.get("size_mb", 0)
+        has_indexes = "✓" if entity_stats.get("has_indexes", False) else "✗"
+        print(f"{entity.title()}: {count:,} docs, {size_mb:.1f} MB, Indexes: {has_indexes} (Latest: {latest_update})")
+        total_docs += count
+        total_size += size_mb
+    print(f"\nTotal: {total_docs:,} documents, {total_size:.1f} MB")
     print("-------------------------")
     return stats
 
