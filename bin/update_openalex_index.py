@@ -221,6 +221,74 @@ def create_all_indexes(db):
         logger.error(f"Error creating indexes: {e}")
         raise
 
+def check_index_progress(db):
+    """Check the progress of ongoing index creation operations."""
+    try:
+        # We need to run currentOp against admin database
+        admin_db = db.client.admin
+        current_ops = admin_db.command("currentOp")
+        found_index_ops = False
+        seen_indexes = set()  # Track unique index builds
+        
+        # Sort operations by namespace and progress percentage for consistent output
+        index_builds = []
+        for op in current_ops['inprog']:
+            # Look specifically for index operations on our database
+            if (op.get('msg') and 'Index Build' in op['msg'] and
+                op.get('ns', '').startswith(db.name + '.')):
+                ns = op.get('ns', 'unknown')
+                progress = op.get('progress', {})
+                total = progress.get('total', 0)
+                current = progress.get('done', 0)
+                
+                # Create a unique key for this index build
+                index_key = f"{ns}:{total}"
+                if index_key not in seen_indexes:
+                    seen_indexes.add(index_key)
+                    found_index_ops = True
+                    if total > 0:
+                        percent = (current / total) * 100
+                    # Format numbers with commas for readability
+                    current_fmt = f"{current:,}"
+                    total_fmt = f"{total:,}"
+                    
+                    # Get index information
+                    index_spec = op.get('command', {}).get('indexes', [{}])[0]
+                    index_name = index_spec.get('name', 'unknown')
+                    index_key = ', '.join(f"{k}: {v}" for k, v in index_spec.get('key', {}).items())
+                    index_info = f"[{index_name} ({index_key})]" if index_key else ""
+                    
+                    # Determine operation type from the index build message
+                    msg = op.get('msg', '').lower()
+                    if "scanning" in msg:
+                        operation_type = "documents (scanning collection)"
+                    elif "inserting keys" in msg:
+                        operation_type = "index entries (inserting)"
+                    elif "sorting" in msg:
+                        operation_type = "index entries (sorting)"
+                    elif "draining writes" in msg:
+                        operation_type = "writes (processing updates that occurred during index build)"
+                    else:
+                        # Default case - show the actual message for debugging
+                        operation_type = f"operations ({msg})"
+                    
+                    index_builds.append((percent, 
+                            f"Index build on {ns} {index_info}: {percent:.1f}% complete - Processed {current_fmt}/{total_fmt} {operation_type}"))
+                else:
+                    index_builds.append((0, 
+                            f"Index build on {ns} {index_info} in progress (no progress data available)"))
+        
+        # Display progress sorted by completion percentage
+        for _, message in sorted(index_builds, reverse=True):
+            logger.info(message)
+        
+        if not found_index_ops:
+            logger.info("No active index creation operations found")
+            
+    except PyMongoError as e:
+        logger.error(f"Error checking index progress: {e}")
+        raise
+
 def parse_arguments():
     """Parse command-line arguments"""
     parser = argparse.ArgumentParser(description="Update OpenAlex works index and citation keys")
@@ -233,6 +301,8 @@ def parse_arguments():
                        help="Number of documents to process in each batch (default: 1000, max recommended: 10000)")
     parser.add_argument("--only-indexes", action="store_true",
                        help="Only create indexes without updating citation keys")
+    parser.add_argument("--index-progress", action="store_true",
+                       help="Check the progress of ongoing index creation")
     return parser.parse_args()
 
 def main():
@@ -244,6 +314,11 @@ def main():
         # Connect to MongoDB
         client = MongoClient(args.mongo_uri)
         db = client.openalex
+
+        if args.index_progress:
+            check_index_progress(db)
+            client.close()
+            sys.exit(0)
 
         if args.only_indexes:
             logger.info("Creating indexes for all collections...")
