@@ -392,48 +392,63 @@ def create_indexes(db):
 
 
 
-def check_index_progress(db):
-    """Check the progress of ongoing index creation operations and show completed indexes."""
+def check_index_progress(db, collection_name=None):
+    """Check the progress of ongoing index creation operations and show completed indexes.
+    
+    Args:
+        db: MongoDB database connection
+        collection_name: Optional name of collection to check. If None, checks all collections.
+    """
     try:
-        # First, get all existing indexes
-        logger.info("Checking existing indexes...")
-        existing_indexes = []
-        try:
-            index_info = db.works.index_information()
-            for name, info in index_info.items():
-                key_str = ', '.join(f"{k}: {v}" for k, v in info['key'])
-                existing_indexes.append(f"[{name} ({key_str})]")
-            if existing_indexes:
-                logger.info("Completed indexes:")
-                for idx in sorted(existing_indexes):
-                    logger.info(f"  {idx}")
-            else:
-                logger.info("No completed indexes found")
-        except PyMongoError as e:
-            logger.warning(f"Could not retrieve existing indexes: {e}")
+        # Get list of collections to check
+        collections = ([collection_name] if collection_name 
+                      else ["works", "authors", "concepts", "institutions", 
+                           "sources", "topics", "fields", "subfields", 
+                           "domains", "funders", "publishers"])
+        
+        # Check each collection's indexes
+        for coll_name in collections:
+            logger.info(f"\nChecking indexes for {coll_name}...")
+            collection = db[coll_name]
+            
+            # Get existing indexes
+            try:
+                index_info = collection.index_information()
+                if index_info:
+                    logger.info(f"Completed indexes for {coll_name}:")
+                    for name, info in sorted(index_info.items()):
+                        key_str = ', '.join(f"{k}: {v}" for k, v in info['key'])
+                        logger.info(f"  [{name} ({key_str})]")
+                else:
+                    logger.info(f"No indexes found for {coll_name}")
+            except PyMongoError as e:
+                logger.warning(f"Could not retrieve indexes for {coll_name}: {e}")
 
         # Check ongoing index builds
         logger.info("\nChecking ongoing and queued index builds...")
         admin_db = db.client.admin
         current_ops = admin_db.command("currentOp", {"$all": True})
         found_index_ops = False
-        seen_indexes = set()  # Track unique index builds
-        queued_indexes = set()  # Track queued indexes
+        seen_indexes = set()
+        queued_indexes = {}  # Track queued indexes by collection
         
-        # Sort operations by namespace and progress percentage for consistent output
+        # Process operations
         index_builds = []
         for op in current_ops['inprog']:
             # Look for both active and queued index operations
-            if op.get('command', {}).get('createIndexes') == 'works':
+            if op.get('command', {}).get('createIndexes'):  # Remove 'works' check to allow all collections
+                collection = op['command']['createIndexes']  # Get actual collection name
                 indexes = op.get('command', {}).get('indexes', [])
                 for idx in indexes:
                     key_str = ', '.join(f"{k}: {v}" for k, v in idx.get('key', {}).items())
                     index_name = idx.get('name', 'unknown')
                     if not op.get('msg'):  # If no msg, it's likely queued
-                        queued_indexes.add(f"[{index_name} ({key_str})]")
+                        if collection not in queued_indexes:
+                            queued_indexes[collection] = set()
+                        queued_indexes[collection].add(f"[{index_name} ({key_str})]")
                         continue
 
-            # Look specifically for active index operations
+            # Look specifically for active index operations across all collections
             if (op.get('msg') and 'Index Build' in op['msg'] and
                 op.get('ns', '').startswith(db.name + '.')):
                 ns = op.get('ns', 'unknown')
@@ -480,15 +495,27 @@ def check_index_progress(db):
         
         # Display queued indexes if any
         if queued_indexes:
-            logger.info("\nQueued indexes:")
-            for idx in sorted(queued_indexes):
-                logger.info(f"  {idx}")
+            logger.info("\nQueued indexes by collection:")
+            for coll, indexes in sorted(queued_indexes.items()):
+                logger.info(f"\n{coll}:")
+                for idx in sorted(indexes):
+                    logger.info(f"  {idx}")
         
-        # Display progress sorted by completion percentage
         if index_builds:
-            logger.info("\nActive index builds:")
-            for _, message in sorted(index_builds, reverse=True):
-                logger.info(f"  {message}")
+            logger.info("\nActive index builds by collection:")
+            # Group by collection
+            builds_by_collection = {}
+            for build in index_builds:
+                coll = build[1].split()[3]  # Extract collection name from message
+                if coll not in builds_by_collection:
+                    builds_by_collection[coll] = []
+                builds_by_collection[coll].append(build)
+            
+            # Display grouped results
+            for coll, builds in sorted(builds_by_collection.items()):
+                logger.info(f"\n{coll}:")
+                for _, message in sorted(builds, reverse=True):
+                    logger.info(f"  {message}")
         
         if not found_index_ops and not queued_indexes:
             logger.info("No active or queued index creation operations found")
@@ -511,6 +538,8 @@ def parse_arguments():
                        help="Only create indexes without updating citation keys")
     parser.add_argument("--index-progress", action="store_true",
                        help="Check the progress of ongoing index creation")
+    parser.add_argument("--collection", type=str,
+                       help="Check indexes for specific collection")
     return parser.parse_args()
 
 
@@ -527,7 +556,7 @@ async def main():
         start_time = datetime.now()
     
         if args.index_progress:
-            check_index_progress(db)
+            check_index_progress(db, args.collection)
             client.close()
             sys.exit(0)
 
