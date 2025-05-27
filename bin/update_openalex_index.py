@@ -283,6 +283,69 @@ async def update_works_index(db, limit: Optional[int] = None, batch_size: int = 
         logger.error(f"Unexpected error: {str(e)}")
         raise
 
+def create_index(collection, index_fields, unique=False):
+    """Create an index on the specified fields if it doesn't exist"""
+    try:
+        # Get the auto-generated index name that MongoDB would use
+        index_name = "_".join(f"{field}_{direction}" for field, direction in index_fields)
+        
+        # Check if index already exists
+        existing_indexes = collection.index_information()
+        existing_key_patterns = {
+            name: [tuple(key) for key in info['key']]
+            for name, info in existing_indexes.items()
+        }
+        
+        # Check if an index with the same key pattern exists
+        index_key_pattern = [tuple(field) for field in index_fields]
+        for existing_pattern in existing_key_patterns.values():
+            if existing_pattern == index_key_pattern:
+                logger.info(f"Index already exists for fields: {index_fields}")
+                return
+
+        # Create index if it doesn't exist
+        start_time = datetime.now()
+        collection.create_index(index_fields, unique=unique, background=True)
+        logger.info(f"Index created on fields: {index_fields} "
+                   f"in {datetime.now() - start_time} seconds")
+    except PyMongoError as e:
+        logger.warning(f"Error creating index on {index_fields}: {str(e)}")
+    except Exception as e:
+        logger.error(f"Unexpected error creating index on {index_fields}: {str(e)}")
+        raise
+
+def create_text_index(collection, field_name, **kwargs):
+    """Create a text index with special handling for language settings"""
+    try:
+        # Check if text index already exists
+        existing_indexes = collection.index_information()
+        for name, info in existing_indexes.items():
+            if any('text' in str(key) for key in info['key']):
+                logger.info(f"Text index already exists on {collection.name}")
+                return
+
+        # Default settings for text index
+        default_settings = {
+            'default_language': 'english',
+            'language_override': 'no_language',
+            'background': True
+        }
+        # Update with any provided kwargs
+        settings = {**default_settings, **kwargs}
+        
+        start_time = datetime.now()
+        collection.create_index(
+            [(field_name, "text")],
+            **settings
+        )
+        logger.info(f"Text index created on {field_name} "
+                   f"in {datetime.now() - start_time} seconds")
+    except PyMongoError as e:
+        logger.warning(f"Error creating text index on {field_name}: {str(e)}")
+    except Exception as e:
+        logger.error(f"Unexpected error creating text index: {str(e)}")
+        raise
+
 def create_indexes(db):
     """Create all necessary indexes for all collections"""
     ENTITY_TYPES = [
@@ -298,35 +361,32 @@ def create_indexes(db):
         collection = db[entity_type]
         logger.info(f"Creating indexes for {entity_type}...")
         
-        # Common indexes for all collections
-        collection.create_index([("id", ASCENDING)], unique=True, background=True)
-        collection.create_index([("display_name", ASCENDING)], background=True)
-        collection.create_index([("works_count", ASCENDING)], background=True)
-        collection.create_index([("cited_by_count", ASCENDING)], background=True)
-        
+        # Common indexes for all collections (note: removed unique constraint)
+        create_index(collection, [("id", ASCENDING)])
+        create_index(collection, [("display_name", ASCENDING)])
+        create_index(collection, [("works_count", ASCENDING)])
+        create_index(collection, [("cited_by_count", ASCENDING)]) 
+
         # Collection-specific indexes
         if entity_type == "works":
-            collection.create_index([("ids.openalex", ASCENDING)], background=True)
-            collection.create_index([("publication_year", ASCENDING)], background=True)
-            collection.create_index([("authorships.author.id", ASCENDING)], background=True)
-            collection.create_index([("_author_ids", ASCENDING)], background=True)
-            collection.create_index([("concepts.id", ASCENDING)], background=True)
-            collection.create_index([("ids.doi", ASCENDING)], background=True)
-            collection.create_index([("_citation_key", ASCENDING)], background=True)
+            create_index(collection, [("ids.openalex", ASCENDING)])
+            create_index(collection, [("publication_year", ASCENDING)])
+            create_index(collection, [("authorships.author.id", ASCENDING)])
+            create_index(collection, [("_author_ids", ASCENDING)])
+            create_index(collection, [("concepts.id", ASCENDING)])
+            create_index(collection, [("ids.doi", ASCENDING)])
+            create_index(collection, [("_citation_key", ASCENDING)])
             # Create text index for search functionality
-            collection.create_index([("search_blob", "text")], 
-                                 background=True,
-                                 default_language="english",
-                                 language_override="no_language")
+            create_text_index(collection, "search_blob")
             
         elif entity_type == "authors":
-            collection.create_index([("last_known_institution.id", ASCENDING)], background=True)
-            collection.create_index([("x_concepts.id", ASCENDING)], background=True)
-            collection.create_index([("ids.orcid", ASCENDING)], background=True)
+            create_index(collection, [("last_known_institution.id", ASCENDING)])
+            create_index(collection, [("x_concepts.id", ASCENDING)])
+            create_index(collection, [("ids.orcid", ASCENDING)])
             
         elif entity_type == "concepts":
-            collection.create_index([("ancestors.id", ASCENDING)], background=True)
-                
+            create_index(collection, [("ancestors.id", ASCENDING)])
+        
     logger.info("All index creation jobs have been initiated")
 
 
