@@ -193,29 +193,70 @@ def update_works_index(db, batch_size: int = 1000, update_existing: bool = False
 def create_all_indexes(db):
     """Create all required indexes for each collection."""
     try:
-        # Works collection indexes
-        logger.info("Creating indexes for works collection...")
-
-        # Define required indexes
-        required_indexes = [
+        # Common indexes needed for all entity types
+        common_indexes = [
             [('id', ASCENDING)],
-            [('ids.openalex', ASCENDING)],
-            [('ids.doi', ASCENDING)],
-            [('ids.mag', ASCENDING)],
-            [('citation_key', ASCENDING)]
+            [('_id', ASCENDING)]  # Explicitly create index on _id to ensure it's optimized
         ]
-
-        # Create all indexes in background without checking existing ones
-        for index_spec in required_indexes:
-            index_name = '_'.join(f"{field}_{order}" for field, order in index_spec)
-            logger.info(f"Creating index {index_name} in background...")
-            try:
-                db.works.create_index(index_spec, background=True, maxTimeMS=1)
-            except PyMongoError as e:
-                # Ignore duplicate index errors or other non-critical errors
-                logger.warning(f"Note: {e}")
-
-        logger.info("Works indexes creation initiated in background")
+        
+        # Collection-specific indexes
+        collection_indexes = {
+            'works': [
+                [('ids.openalex', ASCENDING)],
+                [('ids.doi', ASCENDING)],
+                [('ids.mag', ASCENDING)],
+                [('citation_key', ASCENDING)],
+                [('title', 'text')],  # Text index for search
+                [('publication_year', DESCENDING)],
+                [('cited_by_count', DESCENDING)]
+            ],
+            'authors': [
+                [('display_name', ASCENDING)],
+                [('display_name', 'text')],  # Text index for search
+                [('works_count', DESCENDING)]
+            ],
+            'concepts': [
+                [('display_name', ASCENDING)],
+                [('display_name', 'text')],
+                [('works_count', DESCENDING)],
+                [('level', ASCENDING)]
+            ],
+            'institutions': [
+                [('display_name', ASCENDING)],
+                [('display_name', 'text')],
+                [('works_count', DESCENDING)],
+                [('country_code', ASCENDING)]
+            ],
+            'publishers': [
+                [('display_name', ASCENDING)],
+                [('display_name', 'text')],
+                [('works_count', DESCENDING)]
+            ],
+            'sources': [
+                [('display_name', ASCENDING)],
+                [('display_name', 'text')],
+                [('works_count', DESCENDING)],
+                [('type', ASCENDING)]
+            ]
+        }
+        
+        # Create indexes for each collection
+        for collection_name, specific_indexes in collection_indexes.items():
+            collection = db[collection_name]
+            logger.info(f"Creating indexes for {collection_name} collection...")
+            
+            # Combine common and collection-specific indexes
+            all_indexes = common_indexes + specific_indexes
+            
+            # Create all indexes in background
+            for index_spec in all_indexes:
+                index_name = '_'.join(f"{field}_{order}" for field, order in index_spec)
+                logger.info(f"Creating index {index_name} on {collection_name} in background...")
+                try:
+                    collection.create_index(index_spec, background=True, maxTimeMS=1)
+                except PyMongoError as e:
+                    # Ignore duplicate index errors or other non-critical errors
+                    logger.warning(f"Note: {e}")
 
     except PyMongoError as e:
         logger.error(f"Error creating indexes: {e}")
@@ -361,7 +402,7 @@ def main():
             logger.info("Creating indexes for all collections...")
             create_all_indexes(db)
             duration = datetime.now() - start_time
-            logger.info(f"Index creation initiated in {duration}. Indexes will continue building in the background.")
+            logger.info(f"All indexes creation initiated in {duration}. Indexes will continue building in the background.")
             client.close()
             sys.exit(0)
 
