@@ -144,82 +144,193 @@ def generate_citation_key(work: dict) -> Optional[str]:
         logger.warning(f"Error generating citation key: {str(e)}")
         return None
 
-def update_works_index(db, batch_size: int = 1000, update_existing: bool = False):
-    """Update citation keys for works in the database."""
+async def update_works_index(db, limit: Optional[int] = None, batch_size: int = 1000, force: bool = False) -> None:
+    """Update works collection with citation keys and indexes"""
     try:
-        query = {} if update_existing else {'citation_key': {'$exists': False}}
-        cursor = db.works.find(query)
-        total_count = db.works.count_documents(query)
-        processed = 0
-        batch = []
+        # Check and create necessary indexes if they don't exist
+        indexes = db.works.list_indexes().to_list(None)
+        existing_indexes = {idx['name'] for idx in indexes}
+        logger.info(f"Found existing indexes: {existing_indexes}")
 
-        logger.info(f"Processing {total_count} documents...")
-        for work in cursor:
-            if not work.get('citation_key'):
-                citation_key = generate_citation_key(work)
+        # Create text index on search_blob if it doesn't exist
+        if 'search_blob_text' not in existing_indexes:
+            logger.info("Creating text index on search_blob (this may take a while)...")
+            logger.info("You can continue using the database while the index builds in the background")
+            start_time = datetime.now()
+            db.works.create_index(
+                [("search_blob", "text")],
+                default_language="english",  # Set default language
+                language_override="no_language",  # Use a field name that doesn't exist to prevent language override
+                background=True
+            )
+            duration = datetime.now() - start_time
+            logger.info(f"Text index creation completed in {duration}")
+
+        # MongoDB automatically names indexes as fieldname_direction (e.g. field_1 for ascending)
+        required_indexes = [
+            ("_citation_key", ASCENDING),
+            ("title", ASCENDING),
+            ("publication_year", ASCENDING),
+            ("_author_ids", ASCENDING),
+            ("_concept_ids", ASCENDING)
+        ]
+
+        for field, direction in required_indexes:
+            index_name = f"{field}_1"
+            if index_name not in existing_indexes:
+                logger.info(f"Creating {field} index in background...")
+                db.works.create_index([(field, direction)], background=True)
+
+        # Process works in batches
+        updates = []
+        processed = 0
+        skipped = 0
+
+        # Build find query for works that need updating
+        find_query = {
+            "$or": [
+                {"_citation_key": {"$exists": False}},
+                {"_citation_key": None},
+                {"search_blob": {"$exists": False}},
+                {"search_blob": None}
+            ]
+        }
+
+        # Add projection to limit retrieved fields
+        projection = {
+            "_id": 1,
+            "authorships": 1,
+            "publication_year": 1,
+            "title": 1,
+            "_citation_key": 1,
+            "search_blob": 1
+        }
+
+        # Get estimated count for progress reporting
+        try:
+            total_estimate = db.works.count_documents(find_query)
+            logger.info(f"Estimated documents needing updates: {total_estimate}")
+        except Exception as e:
+            logger.warning(f"Could not get document count estimate: {e}")
+            total_estimate = None
+
+        cursor = db.works.find(find_query, projection)
+        if limit:
+            cursor = cursor.limit(limit)
+            total_estimate = limit
+
+        async for work in cursor:
+            # Generate citation key
+            citation_key = generate_citation_key(work)
+
+            # Create search blob combining all relevant fields
+            author_names = " ".join(
+                auth.get("author", {}).get("display_name", "")
+                for auth in work.get("authorships", [])
+            )
+            year = str(work.get("publication_year", ""))
+            title = work.get("title", "")
+
+            # Combine fields with extra spaces to prevent unwanted word combinations
+            search_blob = f"{author_names} {year} {title}"
+
+            # Create update operation
+            update = {"$set": {}}
+            if force or not work.get("_citation_key"):
                 if citation_key:
-                    batch.append(UpdateOne(
-                        {'_id': work['_id']},
-                        {'$set': {'citation_key': citation_key}}
-                    ))
+                    update["$set"]["_citation_key"] = citation_key
+            if force or not work.get("search_blob"):
+                update["$set"]["search_blob"] = search_blob
+
+            if update["$set"]:
+                updates.append(UpdateOne(
+                    {"_id": work["_id"]},
+                    update
+                ))
+            else:
+                skipped += 1
 
             processed += 1
-            if len(batch) >= batch_size:
-                try:
-                    result = db.works.bulk_write(batch)
-                    logger.info(f"Processed {processed}/{total_count} documents. " +
-                              f"Modified {result.modified_count} records.")
-                except PyMongoError as e:
-                    logger.error(f"Error in bulk write: {e}")
-                batch = []
+            if processed % 10000 == 0:  # Log progress every x documents
+                percentage = ((processed + skipped) / total_estimate) * 100 if total_estimate else 0
+                logger.info(f"Processed {processed} works, skipped {skipped} works so far. Progress: {percentage:.2f}%")
 
-        # Process remaining documents
-        if batch:
-            try:
-                result = db.works.bulk_write(batch)
-                logger.info(f"Final batch: Modified {result.modified_count} records.")
-            except PyMongoError as e:
-                logger.error(f"Error in final bulk write: {e}")
+            if len(updates) >= batch_size:
+                result = db.works.bulk_write(updates)
+                logger.info(f"Batch update completed. Processed {len(updates)} updates.")
+                updates = []
 
-        logger.info("Citation key update completed")
+                if total_estimate:
+                    logger.info(f"Progress: {processed + skipped}/{total_estimate} ({((processed + skipped)/total_estimate)*100:.1f}%)")
+                else:
+                    logger.info(f"Processed {processed} works, skipped {skipped} works.")
+
+                # Check if we've hit the limit
+                if limit and processed >= limit:
+                    break
+
+        # Process remaining updates
+        if updates:
+            result = db.works.bulk_write(updates)
+            processed += len(updates)
+
+        logger.info(f"Completed processing {processed} works, skipped {skipped} works.")
 
     except PyMongoError as e:
-        logger.error(f"Error updating works index: {e}")
+        logger.error(f"MongoDB error: {str(e)}")
         raise
     except Exception as e:
         logger.error(f"Unexpected error: {str(e)}")
         raise
 
-def create_all_indexes(db):
-    """Create all required indexes for each collection."""
-    try:
-        # Works collection indexes
-        logger.info("Creating indexes for works collection...")
+def create_indexes(db):
+    """Create all necessary indexes for all collections"""
+    ENTITY_TYPES = [
+        "works", "authors", "concepts",
+        "institutions", "sources", "topics",
+        "fields", "subfields", "domains", 
+        "funders", "publishers"
+    ]
+    
+    logger.info("Starting to create indexes for all collections...")
+    
+    for entity_type in ENTITY_TYPES:
+        collection = db[entity_type]
+        logger.info(f"Creating indexes for {entity_type}...")
+        
+        # Common indexes for all collections
+        collection.create_index([("id", ASCENDING)], unique=True, background=True)
+        collection.create_index([("display_name", ASCENDING)], background=True)
+        collection.create_index([("works_count", ASCENDING)], background=True)
+        collection.create_index([("cited_by_count", ASCENDING)], background=True)
+        
+        # Collection-specific indexes
+        if entity_type == "works":
+            collection.create_index([("ids.openalex", ASCENDING)], background=True)
+            collection.create_index([("publication_year", ASCENDING)], background=True)
+            collection.create_index([("authorships.author.id", ASCENDING)], background=True)
+            collection.create_index([("_author_ids", ASCENDING)], background=True)
+            collection.create_index([("concepts.id", ASCENDING)], background=True)
+            collection.create_index([("ids.doi", ASCENDING)], background=True)
+            collection.create_index([("_citation_key", ASCENDING)], background=True)
+            # Create text index for search functionality
+            collection.create_index([("search_blob", "text")], 
+                                 background=True,
+                                 default_language="english",
+                                 language_override="no_language")
+            
+        elif entity_type == "authors":
+            collection.create_index([("last_known_institution.id", ASCENDING)], background=True)
+            collection.create_index([("x_concepts.id", ASCENDING)], background=True)
+            collection.create_index([("ids.orcid", ASCENDING)], background=True)
+            
+        elif entity_type == "concepts":
+            collection.create_index([("ancestors.id", ASCENDING)], background=True)
+                
+    logger.info("All index creation jobs have been initiated")
 
-        # Define required indexes
-        required_indexes = [
-            [('id', ASCENDING)],
-            [('ids.openalex', ASCENDING)],
-            [('ids.doi', ASCENDING)],
-            [('ids.mag', ASCENDING)],
-            [('citation_key', ASCENDING)]
-        ]
 
-        # Create all indexes in background without checking existing ones
-        for index_spec in required_indexes:
-            index_name = '_'.join(f"{field}_{order}" for field, order in index_spec)
-            logger.info(f"Creating index {index_name} in background...")
-            try:
-                db.works.create_index(index_spec, background=True, maxTimeMS=1)
-            except PyMongoError as e:
-                # Ignore duplicate index errors or other non-critical errors
-                logger.warning(f"Note: {e}")
 
-        logger.info("Works indexes creation initiated in background")
-
-    except PyMongoError as e:
-        logger.error(f"Error creating indexes: {e}")
-        raise
 
 def check_index_progress(db):
     """Check the progress of ongoing index creation operations and show completed indexes."""
@@ -333,50 +444,62 @@ def parse_arguments():
                        help="MongoDB connection URI")
     parser.add_argument("--limit", type=int, help="Limit the number of works to process")
     parser.add_argument("--skip-indexes", action="store_true",
-                       help="Skip index creation (use if indexes already exist)")
+                       help="Skip index creation")
     parser.add_argument("--batch-size", type=int, default=1000,
                        help="Number of documents to process in each batch (default: 1000, max recommended: 10000)")
-    parser.add_argument("--only-indexes", action="store_true",
+    parser.add_argument("--skip-updating", action="store_true",
                        help="Only create indexes without updating citation keys")
     parser.add_argument("--index-progress", action="store_true",
                        help="Check the progress of ongoing index creation")
     return parser.parse_args()
 
-def main():
-    """Main entry point for the script."""
+
+async def main():    
     args = parse_arguments()
     start_time = datetime.now()
-
+    
     try:
         # Connect to MongoDB
         client = MongoClient(args.mongo_uri)
         db = client.openalex
-
+        logger.info("Connected to MongoDB")
+        
+        start_time = datetime.now()
+    
         if args.index_progress:
             check_index_progress(db)
             client.close()
             sys.exit(0)
 
-        if args.only_indexes:
+        # Handle index creation
+        if not args.skip_indexes:
             logger.info("Creating indexes for all collections...")
-            create_all_indexes(db)
+            create_indexes(db)
             duration = datetime.now() - start_time
-            logger.info(f"Index creation initiated in {duration}. Indexes will continue building in the background.")
-            client.close()
-            sys.exit(0)
+            logger.info(f"Index creation completed in {duration}")
 
-        # Update works index
-        logger.info("Updating works index...")
-        update_works_index(db, args.batch_size, args.skip_indexes)
 
+        # Update works (including their indexes unless --skip-indexes)
+        if not args.skip_updating:
+            logger.info("Skipping index creation as requested")
+            logger.info(f"Using batch size: {args.batch_size}")
+            update_works_index(db, args.limit, batch_size=args.batch_size)
+        
+        # Store update metadata
+        db.metadata.insert_one({
+            "key": "last_index_update",
+            "value": datetime.now().isoformat(),
+            "type": "works_citation_keys"
+        })
+        
         duration = datetime.now() - start_time
-        logger.info(f"Process completed in {duration}")
-
+        logger.info(f"Update indexes completed in {duration}")       
     except Exception as e:
-        logger.error(f"An error occurred: {e}")
+        logger.error(f"Error updating index: {str(e)}")
         sys.exit(1)
     finally:
         client.close()
 
 if __name__ == "__main__":
-    main()
+    import asyncio
+    asyncio.run(main())
