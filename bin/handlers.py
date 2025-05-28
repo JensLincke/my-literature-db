@@ -4,6 +4,8 @@ from typing import Optional, Any, Dict, List, Tuple
 from fastapi import HTTPException, Query
 from motor.motor_asyncio import AsyncIOMotorCollection
 from pymongo import DESCENDING
+import logging
+from time import perf_counter
 
 from filter_utils import parse_filter_param, parse_sort_param, parse_select_param, parse_group_by_param
 
@@ -13,6 +15,11 @@ class BaseEntityHandler:
     def __init__(self, collection: AsyncIOMotorCollection, entity_name: str):
         self.collection = collection
         self.entity_name = entity_name
+        self.logger = logging.getLogger(f"handlers.{entity_name}")
+        
+    def verbose(self) -> bool:
+        """Returns whether debug logging is enabled"""
+        return self.logger.isEnabledFor(logging.DEBUG)
 
     async def list_entities(
         self,
@@ -127,14 +134,26 @@ class BaseEntityHandler:
         select_param: Optional[str] = None
     ) -> Dict[str, Any]:
         """Generic method for text search across entities"""
+        if self.verbose():
+            start_time = perf_counter()
+            self.logger.debug(f"Starting search with query: '{q}'")
+            self.logger.debug(f"Parameters: skip={skip}, limit={limit}, explain_score={explain_score}")
+            if filter_query:
+                self.logger.debug(f"Filter query: {filter_query}")
+            
         try:
             # Basic text search query
             search_query = {"$text": {"$search": q}}
+            
+            if self.verbose():
+                self.logger.debug(f"Initial text search query: {search_query}")
             
             # Add any filter conditions
             if filter_query:
                 # Combine text search with filter using $and
                 search_query = {"$and": [search_query, filter_query]}
+                if self.verbose():
+                    self.logger.debug(f"Combined search query with filters: {search_query}")
             
             # Start with default projection if none provided
             if not projection:
@@ -157,11 +176,18 @@ class BaseEntityHandler:
             # Handle MongoDB's text score sorting
             # When no sort is specified, default to text score
             if not sort_param or "relevance_score" in sort_param:
+                if self.verbose():
+                    self.logger.debug("Using text score sorting")
+                    self.logger.debug(f"Projection for find: {projection}")
+                
                 # MongoDB requires special handling for textScore sorting
                 cursor = self.collection.find(
                     search_query,
                     projection
                 ).sort([("score", {"$meta": "textScore"})])
+                
+                if self.verbose():
+                    self.logger.debug("Initial find and sort completed")
                 
                 # Add any additional sort fields if specified
                 for field, direction in sort_specs:
@@ -184,9 +210,25 @@ class BaseEntityHandler:
                     projection
                 ).sort(sort_list)
             
-            total = await self.collection.count_documents(search_query)
+            if self.verbose():
+                self.logger.debug(f"Fetching documents with skip={skip}, limit={limit}")
             
-            if total == 0:
+            # Get one more document than requested to know if there are more
+            try:
+                # Set a reasonable timeout for the operation
+                documents = await cursor.skip(skip).limit(limit + 1).to_list(None)
+            except Exception as e:
+                if self.verbose():
+                    self.logger.error(f"Error fetching documents: {str(e)}")
+                return {
+                    "total": 0,
+                    "skip": skip,
+                    "limit": limit,
+                    "results": [],
+                    "message": f"Search operation timed out. Please try with more specific search terms."
+                }
+            
+            if not documents:
                 return {
                     "total": 0,
                     "skip": skip,
@@ -194,24 +236,41 @@ class BaseEntityHandler:
                     "results": [],
                     "message": f"No matching {self.entity_name}s found. Try different search terms."
                 }
-
-            documents = await cursor.skip(skip).limit(limit).to_list(None)
+                
+            # If we got more documents than limit, there are more pages
+            has_more = len(documents) > limit
+            if has_more:
+                documents = documents[:limit]  # Remove the extra document
+                
+            if self.verbose():
+                self.logger.debug(f"Retrieved {len(documents)} documents")
             
             if explain_score:
+                if self.verbose():
+                    self.logger.debug("Adding score explanations to documents")
                 for doc in documents:
                     doc["_score_explanation"] = {
                         "score": doc.get("score", 0),
                         "query": q
                     }
             
-            return {
-                "total": total,
+            result = {
                 "skip": skip,
                 "limit": limit,
+                "has_more": has_more,
                 "results": documents
             }
 
+            if self.verbose():
+                total_time = perf_counter() - start_time
+                self.logger.debug(f"Search completed in {total_time:.3f}s")
+                self.logger.debug(f"Retrieved {len(documents)} documents, has_more={has_more}")
+
+            return result
+
         except Exception as e:
+            if self.verbose():
+                self.logger.error(f"Search failed: {str(e)}")
             raise HTTPException(
                 status_code=503,
                 detail=f"Text search is not available - the search index is still being built. Error: {str(e)}"
