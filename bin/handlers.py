@@ -23,12 +23,26 @@ class BaseEntityHandler:
         filter_param: Optional[str] = None,
         sort_param: Optional[str] = None,
         select_param: Optional[str] = None,
+        title: Optional[str] = None,
+        year: Optional[int] = None,
+        type: Optional[str] = None,
         extra_filters: Dict = None
     ) -> Dict[str, Any]:
         """Generic method for listing entities with pagination"""
         query = {}
+        
+        # Handle entity-specific name field
         if name:
-            query["display_name"] = {"$regex": name, "$options": "i"}
+            name_field = "title" if self.entity_name == "work" else "display_name"
+            query[name_field] = {"$regex": name, "$options": "i"}
+            
+        # Handle work-specific filters
+        if title:
+            query["title"] = {"$regex": title, "$options": "i"}
+        if year:
+            query["publication_year"] = year
+        if type:
+            query["type"] = type
         
         # Add OpenAlex-style filter if provided
         if filter_param:
@@ -251,79 +265,48 @@ class BaseEntityHandler:
 class WorksHandler(BaseEntityHandler):
     """Handler for academic works"""
     
-    async def list_works(
-        self,
-        title: Optional[str] = None,
-        year: Optional[int] = None,
-        type: Optional[str] = None,
-        per_page: int = 25,
-        filter: Optional[str] = None,
-        sort: Optional[str] = None,
-        select: Optional[str] = None
-    ):
-        extra_filters = {}
-        if title:
-            extra_filters["title"] = {"$regex": title, "$options": "i"}
-        if year:
-            extra_filters["publication_year"] = year
-        if type:
-            extra_filters["type"] = type
-            
-        return await self.list_entities(
-            per_page=per_page,
-            sort_field="cited_by_count",
-            filter_param=filter,
-            sort_param=sort,
-            select_param=select,
-            extra_filters=extra_filters
-        )
+    def __init__(self, collection: AsyncIOMotorCollection, entity_name: str = "work"):
+        super().__init__(collection, entity_name)
+        self.default_sort_field = "cited_by_count"
 
-    async def search_works(
-        self, 
-        q: str, 
-        skip: int = 0, 
-        limit: int = 10, 
+    async def search_entities(
+        self,
+        q: str,
+        skip: int = 0,
+        limit: int = 10,
         explain_score: bool = False,
         filter_query: Dict = None,
-        filter_param: Optional[str] = None,
+        projection: Dict = None,
         sort_param: Optional[str] = None,
         select_param: Optional[str] = None
-    ):
-        # If we received a filter parameter string, parse it
-        if filter_param and not filter_query:
-            filter_query = parse_filter_param(filter_param)
-        
-        # Default projection for works search
-        projection = {
-            "score": {"$meta": "textScore"},
-            "title": 1,
-            "publication_year": 1,
-            "authorships": 1,
-            "type": 1,
-            "_citation_key": 1
-        }
-        
-        # Override with select parameter if provided
-        if select_param:
-            user_projection = parse_select_param(select_param)
-            # Always include score for sorting by relevance
-            user_projection["score"] = {"$meta": "textScore"}
-            projection = user_projection
+    ) -> Dict[str, Any]:
+        """Override search_entities for works with custom projection and scoring"""
+        # Set default work-specific projection if none provided
+        if not projection:
+            projection = {
+                "score": {"$meta": "textScore"},
+                "title": 1,
+                "publication_year": 1,
+                "authorships": 1,
+                "type": 1,
+                "_citation_key": 1
+            }
         
         if explain_score:
             projection["search_blob"] = 1
             
-        result = await self.search_entities(
-            q, 
-            skip, 
-            limit, 
-            explain_score, 
-            filter_query, 
-            projection,
-            sort_param,
-            select_param
+        result = await super().search_entities(
+            q=q,
+            skip=skip,
+            limit=limit,
+            explain_score=explain_score,
+            filter_query=filter_query,
+            projection=projection,
+            sort_param=sort_param,
+            select_param=select_param
         )
         
+        # Add works-specific score explanation
         if explain_score and result.get("results"):
             for doc in result["results"]:
                 search_blob = doc.pop("search_blob", "").lower()
