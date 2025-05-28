@@ -161,6 +161,10 @@ class EntityRouter:
                         select_param=select
                     )
                 
+                # Ensure total field is present in response
+                if "total" not in result:
+                    result["total"] = len(result.get("results", []))
+                
                 if self.verbose:
                     total_time = perf_counter() - start_time
                     total_results = result.get("total", 0)
@@ -313,7 +317,7 @@ def create_entity_routers(app, db, handlers, jsonable_encoder):
         entity_name_plural="authors",
         filter_params_class=AuthorsFilterParams,
         sort_field="cited_by_count",
-        related_entities=["works"],
+        related_entities=["search", "works"],
         jsonable_encoder=jsonable_encoder
     )
     
@@ -327,7 +331,7 @@ def create_entity_routers(app, db, handlers, jsonable_encoder):
         entity_name_plural="concepts",
         filter_params_class=ConceptsFilterParams,
         sort_field="works_count",
-        related_entities=["works"],
+        related_entities=["search", "works"],
         jsonable_encoder=jsonable_encoder
     )
     
@@ -341,7 +345,7 @@ def create_entity_routers(app, db, handlers, jsonable_encoder):
         entity_name_plural="institutions",
         filter_params_class=InstitutionsFilterParams,
         sort_field="works_count",
-        related_entities=["works"],
+        related_entities=["search", "works"],
         jsonable_encoder=jsonable_encoder
     )
     
@@ -369,7 +373,7 @@ def create_entity_routers(app, db, handlers, jsonable_encoder):
         entity_name_plural="sources",
         filter_params_class=SourcesFilterParams,
         sort_field="works_count",
-        related_entities=["works"],
+        related_entities=["search", "works"],
         jsonable_encoder=jsonable_encoder
     )
     
@@ -383,7 +387,7 @@ def create_entity_routers(app, db, handlers, jsonable_encoder):
         entity_name_plural="topics",
         filter_params_class=TopicsFilterParams,
         sort_field="works_count",
-        related_entities=["works"],
+        related_entities=["search", "works"],
         jsonable_encoder=jsonable_encoder
     )
     
@@ -397,7 +401,7 @@ def create_entity_routers(app, db, handlers, jsonable_encoder):
         entity_name_plural="fields",
         filter_params_class=FieldsFilterParams,
         sort_field="works_count",
-        related_entities=["works", "subfields"],
+        related_entities=["search", "works", "subfields"],
         jsonable_encoder=jsonable_encoder
     )
     
@@ -411,7 +415,7 @@ def create_entity_routers(app, db, handlers, jsonable_encoder):
         entity_name_plural="subfields",
         filter_params_class=SubfieldsFilterParams,
         sort_field="works_count",
-        related_entities=["works", "fields"],
+        related_entities=["search", "works", "fields"],
         jsonable_encoder=jsonable_encoder
     )
     
@@ -425,6 +429,6 @@ def create_entity_routers(app, db, handlers, jsonable_encoder):
         entity_name_plural="domains",
         filter_params_class=DomainsFilterParams,
         sort_field="works_count",
-        related_entities=["works", "fields"],
+        related_entities=["search", "works", "fields"],
         jsonable_encoder=jsonable_encoder
     )

@@ -14,6 +14,7 @@ Citation keys are generated based on first author's last name, year, and signifi
 Usage:
     python update_openalex_index.py [--only-indexes] [--mongo-uri MONGO_URI]
     python update_openalex_index.py [--limit LIMIT] [--batch-size SIZE]
+    python update_openalex_index.py --list-indexes [--collection COLLECTION]
 
 Options:
     --only-indexes        Only create/update indexes without updating citation keys
@@ -21,6 +22,8 @@ Options:
     --limit LIMIT        Limit the number of works to process for citation keys
     --batch-size SIZE    Number of documents to process in each batch
     --skip-indexes       Skip index creation (use if indexes already exist)
+    --list-indexes       List all existing indexes and exit
+    --collection NAME    Specify a collection name to check indexes for (optional)
 """
 import os
 import re
@@ -363,9 +366,15 @@ def create_indexes(db):
         
         # Common indexes for all collections (note: removed unique constraint)
         create_index(collection, [("id", ASCENDING)])
-        create_index(collection, [("display_name", ASCENDING)])
+        create_index(collection, [("display_name", ASCENDING)])  # Regular index for sorting and exact matches
         create_index(collection, [("works_count", ASCENDING)])
         create_index(collection, [("cited_by_count", ASCENDING)]) 
+
+        # Create text index for search functionality
+        if entity_type == "works":
+            create_text_index(collection, "search_blob")
+        else:
+            create_text_index(collection, "display_name")
 
         # Collection-specific indexes
         if entity_type == "works":
@@ -376,8 +385,6 @@ def create_indexes(db):
             create_index(collection, [("concepts.id", ASCENDING)])
             create_index(collection, [("ids.doi", ASCENDING)])
             create_index(collection, [("_citation_key", ASCENDING)])
-            # Create text index for search functionality
-            create_text_index(collection, "search_blob")
             
         elif entity_type == "authors":
             create_index(collection, [("last_known_institution.id", ASCENDING)])
@@ -400,32 +407,8 @@ def check_index_progress(db, collection_name=None):
         collection_name: Optional name of collection to check. If None, checks all collections.
     """
     try:
-        # Get list of collections to check
-        collections = ([collection_name] if collection_name 
-                      else ["works", "authors", "concepts", "institutions", 
-                           "sources", "topics", "fields", "subfields", 
-                           "domains", "funders", "publishers"])
-        
-        # Check each collection's indexes
-        for coll_name in collections:
-            logger.info(f"\nChecking indexes for {coll_name}...")
-            collection = db[coll_name]
-            
-            # Get existing indexes
-            try:
-                index_info = collection.index_information()
-                if index_info:
-                    logger.info(f"Completed indexes for {coll_name}:")
-                    for name, info in sorted(index_info.items()):
-                        key_str = ', '.join(f"{k}: {v}" for k, v in info['key'])
-                        logger.info(f"  [{name} ({key_str})]")
-                else:
-                    logger.info(f"No indexes found for {coll_name}")
-            except PyMongoError as e:
-                logger.warning(f"Could not retrieve indexes for {coll_name}: {e}")
-
         # Check ongoing index builds
-        logger.info("\nChecking ongoing and queued index builds...")
+        print("\nChecking ongoing and queued index builds...")
         admin_db = db.client.admin
         current_ops = admin_db.command("currentOp", {"$all": True})
         found_index_ops = False
@@ -495,14 +478,17 @@ def check_index_progress(db, collection_name=None):
         
         # Display queued indexes if any
         if queued_indexes:
-            logger.info("\nQueued indexes by collection:")
+            print("\n=== Queued Indexes ===")
+            print("----------------------")
             for coll, indexes in sorted(queued_indexes.items()):
-                logger.info(f"\n{coll}:")
+                print(f"\n  Collection: {coll}")
+                print("  " + "-" * (len(coll) + 12))  # Underline collection name
                 for idx in sorted(indexes):
-                    logger.info(f"  {idx}")
+                    print(f"    {idx}")
         
         if index_builds:
-            logger.info("\nActive index builds by collection:")
+            print("\n=== Active Index Builds ===")
+            print("-------------------------")
             # Group by collection
             builds_by_collection = {}
             for build in index_builds:
@@ -513,15 +499,72 @@ def check_index_progress(db, collection_name=None):
             
             # Display grouped results
             for coll, builds in sorted(builds_by_collection.items()):
-                logger.info(f"\n{coll}:")
+                print(f"\n  Collection: {coll}")
+                print("  " + "-" * (len(coll) + 12))  # Underline collection name
                 for _, message in sorted(builds, reverse=True):
-                    logger.info(f"  {message}")
+                    # Split message into parts for better formatting
+                    parts = message.split(" - ")
+                    if len(parts) == 2:
+                        index_info, progress_info = parts
+                        print(f"    {index_info}")
+                        print(f"      → {progress_info}")
+                    else:
+                        print(f"    {message}")
         
         if not found_index_ops and not queued_indexes:
-            logger.info("No active or queued index creation operations found")
+            print("\nNo active or queued index creation operations found")
             
     except PyMongoError as e:
-        logger.error(f"Error checking index progress: {e}")
+        print(f"Error checking index progress: {e}", file=sys.stderr)
+        raise
+
+def list_indexes(db, collection_name=None):
+    """List all existing indexes for the specified collections.
+    
+    Args:
+        db: MongoDB database connection
+        collection_name: Optional name of collection to check. If None, checks all collections.
+    """
+    try:
+        # Get list of collections to check
+        collections = ([collection_name] if collection_name 
+                      else ["works", "authors", "concepts", "institutions", 
+                           "sources", "topics", "fields", "subfields", 
+                           "domains", "funders", "publishers"])
+        
+        # Check each collection's indexes
+        first = True
+        for coll_name in collections:
+            if not first:
+                print()  # Add blank line between collections
+            first = False
+            
+            print(f"Collection '{coll_name}':")
+            collection = db[coll_name]
+            
+            # Get existing indexes
+            try:
+                index_info = collection.index_information()
+                if index_info:
+                    for name, info in sorted(index_info.items()):
+                        key_str = ', '.join(f"{k}: {v}" for k, v in info['key'])
+                        is_unique = info.get('unique', False)
+                        is_sparse = info.get('sparse', False)
+                        properties = []
+                        if is_unique:
+                            properties.append("unique")
+                        if is_sparse:
+                            properties.append("sparse")
+                        properties_str = f" ({', '.join(properties)})" if properties else ""
+                        print(f"  - {name}{properties_str}")
+                        print(f"    {key_str}")
+                else:
+                    print("  No indexes found")
+            except PyMongoError as e:
+                print(f"  Error: Could not retrieve indexes - {str(e)}")
+                
+    except PyMongoError as e:
+        print(f"Error listing indexes: {str(e)}")
         raise
 
 def parse_arguments():
@@ -538,6 +581,8 @@ def parse_arguments():
                        help="Only create indexes without updating citation keys")
     parser.add_argument("--index-progress", action="store_true",
                        help="Check the progress of ongoing index creation")
+    parser.add_argument("--list-indexes", action="store_true",
+                       help="List all existing indexes and exit")
     parser.add_argument("--collection", type=str,
                        help="Check indexes for specific collection")
     return parser.parse_args()
@@ -555,6 +600,11 @@ async def main():
         
         start_time = datetime.now()
     
+        if args.list_indexes:
+            list_indexes(db, args.collection)
+            client.close()
+            sys.exit(0)
+
         if args.index_progress:
             check_index_progress(db, args.collection)
             client.close()
@@ -570,10 +620,12 @@ async def main():
 
         # Update works (including their indexes unless --skip-indexes)
         if not args.skip_updating:
-            logger.info("Skipping index creation as requested")
+            logger.info("update works with citation keys and indexes")
             logger.info(f"Using batch size: {args.batch_size}")
             update_works_index(db, args.limit, batch_size=args.batch_size)
         
+
+        logger.info("update metadata for last index update")
         # Store update metadata
         db.metadata.insert_one({
             "key": "last_index_update",

@@ -215,7 +215,6 @@ class BaseEntityHandler:
             
             # Get one more document than requested to know if there are more
             try:
-                # Set a reasonable timeout for the operation
                 documents = await cursor.skip(skip).limit(limit + 1).to_list(None)
             except Exception as e:
                 if self.verbose():
@@ -225,7 +224,7 @@ class BaseEntityHandler:
                     "skip": skip,
                     "limit": limit,
                     "results": [],
-                    "message": f"Search operation timed out. Please try with more specific search terms."
+                    "message": f"Error: {str(e)}."
                 }
             
             if not documents:
