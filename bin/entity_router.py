@@ -5,11 +5,13 @@ This module provides a factory function to create FastAPI routers for different 
 with standardized CRUD operations.
 """
 
+import logging
 from typing import Dict, Any, Callable, Optional, Type, List
 from fastapi import APIRouter, Depends, Query, Path, HTTPException
 from bson.objectid import ObjectId
 from motor.motor_asyncio import AsyncIOMotorDatabase
 from pymongo import DESCENDING
+from time import perf_counter
 
 from handlers import BaseEntityHandler, WorksHandler
 from filter_utils import parse_filter_param
@@ -35,7 +37,7 @@ class EntityRouter:
         filter_params_class: Optional[Type] = None,
         sort_field: str = "works_count",
         related_entities: List[str] = None,
-        jsonable_encoder: Callable = None
+        jsonable_encoder: Callable = None,
     ):
         self.router = router
         self.db = db
@@ -48,8 +50,17 @@ class EntityRouter:
         self.related_entities = related_entities or []
         self.jsonable_encoder = jsonable_encoder
         
+        # Get logger for this entity type
+        self.logger = logging.getLogger(f"entity_router.{entity_type}")
+        # Let it inherit settings from root logger
+        
         # Register the standard routes
         self._register_routes()
+
+    @property
+    def verbose(self) -> bool:
+        """Returns whether debug logging is enabled"""
+        return self.logger.isEnabledFor(logging.DEBUG)
 
     def _register_routes(self):
         """Register the standard routes for this entity type"""
@@ -121,10 +132,20 @@ class EntityRouter:
             select: Optional[str] = Query(None, description="Fields to return. Examples: 'id,title,publication_year'")
         ):
             """Get a specific entity by ID with related entities"""
+            if self.verbose:
+                start_time = perf_counter()
+                self.logger.debug(f"Getting {self.entity_type} with ID: {entity_id}")
+
+            # Get base entity
+            entity_start = perf_counter() if self.verbose else None
             entity = await self.handlers[self.entity_type].get_entity(entity_id, select)
+            if self.verbose:
+                entity_time = perf_counter() - entity_start
+                self.logger.debug(f"Base entity fetch took: {entity_time:.3f}s")
             
             # Add related entities if specified
             if 'works' in self.related_entities:
+                works_start = perf_counter() if self.verbose else None
                 field_name = f"{self.entity_type[:-1] if self.entity_type.endswith('s') else self.entity_type}_id"
                 
                 # Different entities may require different query fields
@@ -136,26 +157,56 @@ class EntityRouter:
                 elif self.entity_type == 'institutions':
                     filter_field = "institution_ids"
                 
+                if self.verbose:
+                    self.logger.debug(f"Fetching related works with filter: {filter_field}={entity_id}")
+                
                 # Get related works
                 entity["works"] = await self.db.works.find(
                     {filter_field: entity_id},
                     {"id": 1, "title": 1, "publication_year": 1, "cited_by_count": 1, "type": 1}
                 ).sort("cited_by_count", DESCENDING).limit(100).to_list(length=None)
                 
-            # Add other related entities as needed
+                if self.verbose:
+                    works_time = perf_counter() - works_start
+                    self.logger.debug(f"Related works fetch took: {works_time:.3f}s")
+                    self.logger.debug(f"Found {len(entity['works'])} related works")
+            
+            # Add other related entities
             if 'authors' in self.related_entities and entity.get("_author_ids"):
+                authors_start = perf_counter() if self.verbose else None
+                if self.verbose:
+                    self.logger.debug(f"Fetching {len(entity['_author_ids'])} related authors")
+                
                 entity["authors"] = await self.db.authors.find(
                     {"id": {"$in": entity["_author_ids"]}},
                     {"_id": 0, "id": 1, "display_name": 1}
                 ).to_list(length=None)
+                
+                if self.verbose:
+                    authors_time = perf_counter() - authors_start
+                    self.logger.debug(f"Related authors fetch took: {authors_time:.3f}s")
             
             if 'concepts' in self.related_entities and entity.get("_concept_ids"):
+                concepts_start = perf_counter() if self.verbose else None
+                if self.verbose:
+                    self.logger.debug(f"Fetching {len(entity['_concept_ids'])} related concepts")
+                
                 entity["concepts"] = await self.db.concepts.find(
                     {"id": {"$in": entity["_concept_ids"]}},
                     {"_id": 0, "id": 1, "display_name": 1, "level": 1}
                 ).to_list(length=None)
+                
+                if self.verbose:
+                    concepts_time = perf_counter() - concepts_start
+                    self.logger.debug(f"Related concepts fetch took: {concepts_time:.3f}s")
             
-            return self.jsonable_encoder(entity)
+            result = self.jsonable_encoder(entity)
+            
+            if self.verbose:
+                total_time = perf_counter() - start_time
+                self.logger.debug(f"Total request processing time: {total_time:.3f}s")
+            
+            return result
 
         # 3. Search endpoint (only add if "search" is in related_entities)
         if "search" in self.related_entities:
