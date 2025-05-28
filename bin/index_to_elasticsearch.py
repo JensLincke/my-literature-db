@@ -5,13 +5,13 @@ Script to index MongoDB data into Elasticsearch
 import asyncio
 import logging
 from motor.motor_asyncio import AsyncIOMotorClient
-from es_handler import ESHandler
+from elastic_index import ESIndex
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-async def index_collection(db, es_handler, collection_name: str, batch_size: int = 1000):
+async def index_collection(db, es_index, collection_name: str, batch_size: int = 10000):
     """Index a MongoDB collection into Elasticsearch"""
     collection = db[collection_name]
     total_docs = await collection.count_documents({})
@@ -34,7 +34,7 @@ async def index_collection(db, es_handler, collection_name: str, batch_size: int
         if len(batch) >= batch_size:
             # Index batch
             tasks = [
-                es_handler.index_document(collection_name, doc_id, document)
+                es_index.index_document(collection_name, doc_id, document)
                 for doc_id, document in batch
             ]
             await asyncio.gather(*tasks)
@@ -46,7 +46,7 @@ async def index_collection(db, es_handler, collection_name: str, batch_size: int
     # Index remaining documents
     if batch:
         tasks = [
-            es_handler.index_document(collection_name, doc_id, document)
+            es_index.index_document(collection_name, doc_id, document)
             for doc_id, document in batch
         ]
         await asyncio.gather(*tasks)
@@ -59,11 +59,11 @@ async def main():
     db = mongo_client.openalex
     
     # Initialize Elasticsearch handler
-    es_handler = ESHandler()
+    es_index = ESIndex()
     
     try:
         # Initialize Elasticsearch indices
-        await es_handler.initialize()
+        await es_index.initialize()
         
         # Collections to index
         # ignore "works", "authors", "concepts", "institutions",  "sources" while experimenting
@@ -72,14 +72,14 @@ async def main():
         # Index each collection
         for collection in collections:
             try:
-                await index_collection(db, es_handler, collection)
+                await index_collection(db, es_index, collection)
             except Exception as e:
                 logger.error(f"Error indexing {collection}: {e}")
                 continue
         
     finally:
         # Clean up
-        await es_handler.close()
+        await es_index.close()
         mongo_client.close()
 
 if __name__ == "__main__":

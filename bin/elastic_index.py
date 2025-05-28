@@ -1,5 +1,7 @@
 """
-Elasticsearch handler for managing search operations
+Elasticsearch Index for Full Text Search
+This module provides an interface to interact with Elasticsearch for indexing and searching openalex data.
+It just provides basic functionality to index documents and perform full text search with strict matching.
 """
 
 from elasticsearch import AsyncElasticsearch
@@ -7,7 +9,7 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-class ESHandler:
+class ESIndex:
     def __init__(self, host="localhost", port=9200):
         # Configure client for Elasticsearch without security
         self.client = AsyncElasticsearch(

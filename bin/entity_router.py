@@ -12,7 +12,7 @@ from bson.objectid import ObjectId
 from motor.motor_asyncio import AsyncIOMotorDatabase
 from pymongo import DESCENDING
 from time import perf_counter
-from es_handler import ESHandler
+from bin.elastic_index import ESHandler
 
 from handlers import BaseEntityHandler, WorksHandler
 from filter_utils import parse_filter_param
