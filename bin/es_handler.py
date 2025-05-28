@@ -9,7 +9,10 @@ logger = logging.getLogger(__name__)
 
 class ESHandler:
     def __init__(self, host="localhost", port=9200):
-        self.client = AsyncElasticsearch([{"host": host, "port": port}])
+        # Configure client for Elasticsearch without security
+        self.client = AsyncElasticsearch(
+            f"http://{host}:{port}"
+        )
         self.index_prefix = "openalex"
 
     async def initialize(self):
@@ -31,33 +34,7 @@ class ESHandler:
                                     "type": "text",
                                     "analyzer": "standard",
                                     "fields": {
-                                        "exact": {
-                                            "type": "text",
-                                            "analyzer": "standard",
-                                            "search_analyzer": "standard",
-                                            "search_quote_analyzer": "keyword"
-                                        }
-                                    }
-                                },
-                                "search_blob": {
-                                    "type": "text",
-                                    "analyzer": "standard",
-                                    "fields": {
-                                        "exact": {
-                                            "type": "text",
-                                            "analyzer": "standard",
-                                            "search_analyzer": "standard",
-                                            "search_quote_analyzer": "keyword"
-                                        }
-                                    }
-                                }
-                            }
-                        },
-                        "settings": {
-                            "analysis": {
-                                "analyzer": {
-                                    "default": {
-                                        "type": "standard"
+                                        "keyword": {"type": "keyword"}
                                     }
                                 }
                             }
@@ -83,33 +60,33 @@ class ESHandler:
         """Search documents in Elasticsearch"""
         index_name = f"{self.index_prefix}_{index}"
         
-        # Build the search query
+        # Build the search query for strict full text search
         search_body = {
             "query": {
-                "bool": {
-                    "should": [
-                        {
-                            "query_string": {
-                                "fields": ["display_name.exact^2", "search_blob.exact"],
-                                "query": query,
-                                "default_operator": "AND",
-                                "quote_field_suffix": ".exact"
-                            }
-                        }
-                    ]
+                "simple_query_string": {
+                    "query": query,
+                    "fields": ["display_name"],
+                    "default_operator": "and",  # Force AND operation between terms
+                    "analyze_wildcard": False,  # Disable wildcard analysis
+                    "auto_generate_synonyms_phrase_query": False,  # Disable automatic phrase queries
+                    "flags": "PHRASE|PRECEDENCE|AND|NOT|OR|WHITESPACE"  # Enable exact phrase matching with quotes
                 }
             },
             "from": skip,
             "size": limit,
             "sort": [
-                {"_score": {"order": "desc"}},
-                {"cited_by_count": {"order": "desc"}}
+                {"_score": {"order": "desc"}}
             ]
         }
 
         # Add filters if provided
         if filter_query:
-            search_body["query"]["bool"]["filter"] = filter_query
+            search_body["query"] = {
+                "bool": {
+                    "must": [search_body["query"]],
+                    "filter": filter_query
+                }
+            }
 
         try:
             result = await self.client.search(

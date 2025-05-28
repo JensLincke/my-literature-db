@@ -11,23 +11,25 @@ from es_handler import ESHandler
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-async def index_collection(mongo_client, es_handler, collection_name: str, batch_size: int = 1000):
+async def index_collection(db, es_handler, collection_name: str, batch_size: int = 1000):
     """Index a MongoDB collection into Elasticsearch"""
-    collection = mongo_client[collection_name]
+    collection = db[collection_name]
     total_docs = await collection.count_documents({})
     logger.info(f"Indexing {total_docs} documents from {collection_name}")
     
-    cursor = collection.find({})
+    cursor = collection.find({}, {"id": 1, "display_name": 1})  # Only retrieve id and display_name fields
     indexed = 0
     batch = []
     
     async for doc in cursor:
-        # Convert MongoDB _id to string if present
-        if "_id" in doc:
-            doc["_id"] = str(doc["_id"])
+        # Create simplified document with only needed fields
+        simple_doc = {
+            "id": doc["id"],
+            "display_name": doc["display_name"]
+        }
         
         # Add document to batch
-        batch.append((doc["id"], doc))
+        batch.append((doc["id"], simple_doc))
         
         if len(batch) >= batch_size:
             # Index batch
