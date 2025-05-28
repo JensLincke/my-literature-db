@@ -34,8 +34,8 @@ from entity_router import create_entity_routers
 MONGO_URI = os.getenv("MONGO_URI", "mongodb://localhost:27017")
 
 # Configure logging
+logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger()
-logger.setLevel(logging.DEBUG)
 
 # Create file handler
 file_handler = logging.handlers.RotatingFileHandler(
@@ -116,7 +116,7 @@ async def startup_db_client():
     db = client.openalex
     
     # Initialize handlers for each entity type
-    handlers["works"] = WorksHandler(db.works, "Work")
+    handlers["works"] = WorksHandler(db.works, "work")
     handlers["authors"] = BaseEntityHandler(db.authors, "Author")
     handlers["concepts"] = BaseEntityHandler(db.concepts, "Concept")
     handlers["institutions"] = BaseEntityHandler(db.institutions, "Institution")

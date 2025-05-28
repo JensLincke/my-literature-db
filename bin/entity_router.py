@@ -121,7 +121,55 @@ class EntityRouter:
                 extra_filters=extra_filters
             )
 
-        # 2. Get entity by ID endpoint
+        # 2. Search endpoint (only add if "search" is in related_entities)
+        if "search" in self.related_entities:
+            self.logger.debug(f"Checking search capability for {self.entity_name_plural}")
+            route_path = f"/{self.entity_name_plural}/search"
+            self.logger.info(f"Registering search endpoint at {route_path}")
+            @self.router.get(
+                route_path,
+                summary=f"Search {self.entity_name_plural}",
+                description=entity_search_description(self.entity_name_plural),
+                response_model=SearchResponse
+            )
+            async def search_entities(
+                search_params: SearchParams = Depends(),
+                filter: Optional[str] = Query(None, description="OpenAlex-style filter parameter"),
+                sort: Optional[str] = Query(None, description="Sort parameter (defaults to relevance score)"),
+                select: Optional[str] = Query(None, description="Fields to return")
+            ):
+                """Search entities using MongoDB text search"""
+                if self.verbose:
+                    start_time = perf_counter()
+                    self.logger.debug(f"Starting search for {self.entity_name_plural}")
+                    self.logger.debug(f"Search params: q='{search_params.q}', skip={search_params.skip}, limit={search_params.limit}")
+                    self.logger.debug(f"Additional params: filter='{filter}', sort='{sort}', select='{select}'")
+
+                # Process filter if provided
+                filter_query = parse_filter_param(filter) if filter else None
+                if self.verbose and filter_query:
+                    self.logger.debug(f"Parsed filter query: {filter_query}")
+
+                result = await self.handlers[self.entity_type].search_entities(
+                        q=search_params.q,
+                        skip=search_params.skip,
+                        limit=search_params.limit,
+                        explain_score=search_params.explain_score,
+                        filter_query=filter_query,
+                        projection=None,  # Use default projection
+                        sort_param=sort,
+                        select_param=select
+                    )
+                
+                if self.verbose:
+                    total_time = perf_counter() - start_time
+                    total_results = result.get("total", 0)
+                    self.logger.debug(f"Search completed in {total_time:.3f}s")
+                    self.logger.debug(f"Found {total_results} matching {self.entity_name_plural}")
+
+                return result
+
+        # 3. Get entity by ID endpoint
         @self.router.get(
             f"/{self.entity_name_plural}/{{entity_id}}",
             summary=f"Get {self.entity_name_singular} details",
@@ -212,48 +260,6 @@ class EntityRouter:
             
             return result
 
-        # 3. Search endpoint (only add if "search" is in related_entities)
-        if "search" in self.related_entities:
-            @self.router.get(
-                f"/{self.entity_name_plural}/search",
-                summary=f"Search {self.entity_name_plural}",
-                description=entity_search_description(self.entity_name_plural),
-                response_model=SearchResponse
-            )
-            async def search_entities(
-                search_params: SearchParams = Depends(),
-                filter: Optional[str] = Query(None, description="OpenAlex-style filter parameter"),
-                sort: Optional[str] = Query(None, description="Sort parameter (defaults to relevance score)"),
-                select: Optional[str] = Query(None, description="Fields to return")
-            ):
-                """Search entities using MongoDB text search"""
-                # Custom search handler for works
-                if self.entity_type == 'works':
-                    return await self.handlers[self.entity_type].search_works(
-                        search_params.q, 
-                        search_params.skip, 
-                        search_params.limit, 
-                        search_params.explain_score,
-                        None,  # Don't parse the filter here, pass it as string
-                        filter,
-                        sort,
-                        select
-                    )
-                else:
-                    # Generic search for other entity types
-                    # Process filter for non-work entities
-                    filter_query = parse_filter_param(filter) if filter else None
-                    return await self.handlers[self.entity_type].search_entities(
-                        search_params.q,
-                        search_params.skip,
-                        search_params.limit,
-                        search_params.explain_score,
-                        filter_query,
-                        None,  # Use default projection
-                        sort,
-                        select
-                    )
-
         # 4. Group by endpoint (for analytics)
         @self.router.get(
             f"/{self.entity_name_plural}/group_by/{{field}}",
@@ -293,7 +299,7 @@ def create_entity_routers(app, db, handlers, jsonable_encoder):
         entity_name_plural="works",
         filter_params_class=WorksFilterParams,
         sort_field="cited_by_count",
-        related_entities=["authors", "concepts", "search"],
+        related_entities=["search", "authors", "concepts"],
         jsonable_encoder=jsonable_encoder
     )
     
