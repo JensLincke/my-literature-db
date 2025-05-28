@@ -155,65 +155,40 @@ class BaseEntityHandler:
                 if self.verbose():
                     self.logger.debug(f"Combined search query with filters: {search_query}")
             
-            # Start with default projection if none provided
+            # Ensure projection exists
             if not projection:
-                projection = {
-                    "score": {"$meta": "textScore"},
-                    "display_name": 1,
-                    "works_count": 1,
-                }
+                projection = {}
             
             # Override with select parameter if provided
             if select_param:
-                user_projection = parse_select_param(select_param)
-                # Always include score for sorting by relevance
-                user_projection["score"] = {"$meta": "textScore"}
-                projection = user_projection
+                projection = parse_select_param(select_param)
             
-            # Parse sorting parameters
-            sort_specs = parse_sort_param(sort_param, self.entity_name) if sort_param else []
+            # Add scoring if needed
+            use_scoring = explain_score or (sort_param and "relevance_score" in sort_param)
+            if use_scoring and "score" not in projection:
+                projection["score"] = {"$meta": "textScore"}
+
+            self.logger.debug(f"start finding")
+
+            # Create cursor
+            cursor = self.collection.find(search_query, projection)
             
-            # Handle MongoDB's text score sorting
-            # When no sort is specified, default to text score
-            if not sort_param or "relevance_score" in sort_param:
-                if self.verbose():
-                    self.logger.debug("Using text score sorting")
-                    self.logger.debug(f"Projection for find: {projection}")
-                
-                # MongoDB requires special handling for textScore sorting
-                cursor = self.collection.find(
-                    search_query,
-                    projection
-                ).sort([("score", {"$meta": "textScore"})])
-                
-                if self.verbose():
-                    self.logger.debug("Initial find and sort completed")
-                
-                # Add any additional sort fields if specified
+            self.logger.debug(f"found somthing")
+
+            # Add sorting if specified
+            if sort_param:
+                sort_specs = parse_sort_param(sort_param, self.entity_name)
                 for field, direction in sort_specs:
-                    if field != "score" and field != "relevance_score":  # Skip the text score field
-                        if isinstance(direction, int):
-                            cursor = cursor.sort(field, direction)
-            else:
-                # Regular sorting without text score
-                sort_list = []
-                for field, direction in sort_specs:
-                    if isinstance(direction, int):
-                        sort_list.append((field, direction))
-                
-                # If no valid sort fields, use default
-                if not sort_list:
-                    sort_list = [("score", {"$meta": "textScore"})]
-                    
-                cursor = self.collection.find(
-                    search_query,
-                    projection
-                ).sort(sort_list)
+                    if field != "relevance_score":
+                        cursor = cursor.sort(field, direction)
+            elif use_scoring:
+                # Default to score-based sorting if scoring is enabled
+                cursor = cursor.sort([("score", {"$meta": "textScore"})])
             
             if self.verbose():
                 self.logger.debug(f"Fetching documents with skip={skip}, limit={limit}")
             
-            # Get one more document than requested to know if there are more
+            # Get results
             try:
                 documents = await cursor.skip(skip).limit(limit + 1).to_list(None)
             except Exception as e:
@@ -342,7 +317,6 @@ class WorksHandler(BaseEntityHandler):
         # Set default work-specific projection if none provided
         if not projection:
             projection = {
-                "score": {"$meta": "textScore"},
                 "title": 1,
                 "publication_year": 1,
                 "authorships": 1,
@@ -350,8 +324,12 @@ class WorksHandler(BaseEntityHandler):
                 "_citation_key": 1
             }
         
-        if explain_score:
-            projection["search_blob"] = 1
+
+        projection ["search_blob"] = 1
+
+        # Add text score only if needed for sorting or score explanation
+        if explain_score or (sort_param and "relevance_score" in sort_param):
+            projection["score"] = {"$meta": "textScore"}
             
         result = await super().search_entities(
             q=q,
@@ -363,16 +341,5 @@ class WorksHandler(BaseEntityHandler):
             sort_param=sort_param,
             select_param=select_param
         )
-        
-        # Add works-specific score explanation
-        if explain_score and result.get("results"):
-            for doc in result["results"]:
-                search_blob = doc.pop("search_blob", "").lower()
-                terms = [t.strip('"').lower() for t in q.split()]
-                matches = [term for term in terms if term in search_blob]
-                doc["_score_explanation"].update({
-                    "matching_terms": matches,
-                    "search_blob": search_blob
-                })
                 
         return result
