@@ -18,7 +18,7 @@ from elastic_index import ESIndex
 logging.basicConfig(level=logging.WARNING)
 logger = logging.getLogger(__name__)
 
-async def index_collection(db, es_index, collection_name: str, batch_size: int = 10, limit: int = None):
+async def index_collection(db, es_index, collection_name: str, batch_size: int = 1000, limit: int = None):
     """Index a MongoDB collection into Elasticsearch
     
     Args:
