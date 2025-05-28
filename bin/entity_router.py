@@ -129,13 +129,17 @@ class EntityRouter:
         )
         async def get_entity(
             entity_id: str = Path(..., description=f"The ID of the {self.entity_name_singular} to retrieve"),
-            select: Optional[str] = Query(None, description="Fields to return. Examples: 'id,title,publication_year'")
+            select: Optional[str] = Query(None, description="Fields to return. Examples: 'id,title,publication_year'"),
+            include: Optional[str] = Query(None, description="Related entities to include. Examples: 'works,authors,concepts'")
         ):
             """Get a specific entity by ID with related entities"""
             if self.verbose:
                 start_time = perf_counter()
                 self.logger.debug(f"Getting {self.entity_type} with ID: {entity_id}")
 
+            # Parse include parameter
+            include_entities = set(include.split(",")) if include else set()
+            
             # Get base entity
             entity_start = perf_counter() if self.verbose else None
             entity = await self.handlers[self.entity_type].get_entity(entity_id, select)
@@ -143,8 +147,8 @@ class EntityRouter:
                 entity_time = perf_counter() - entity_start
                 self.logger.debug(f"Base entity fetch took: {entity_time:.3f}s")
             
-            # Add related entities if specified
-            if 'works' in self.related_entities:
+            # Add related entities only if they are requested and supported
+            if 'works' in self.related_entities and 'works' in include_entities:
                 works_start = perf_counter() if self.verbose else None
                 field_name = f"{self.entity_type[:-1] if self.entity_type.endswith('s') else self.entity_type}_id"
                 
@@ -171,8 +175,8 @@ class EntityRouter:
                     self.logger.debug(f"Related works fetch took: {works_time:.3f}s")
                     self.logger.debug(f"Found {len(entity['works'])} related works")
             
-            # Add other related entities
-            if 'authors' in self.related_entities and entity.get("_author_ids"):
+            # Add other related entities only if requested
+            if 'authors' in self.related_entities and 'authors' in include_entities and entity.get("_author_ids"):
                 authors_start = perf_counter() if self.verbose else None
                 if self.verbose:
                     self.logger.debug(f"Fetching {len(entity['_author_ids'])} related authors")
@@ -186,7 +190,7 @@ class EntityRouter:
                     authors_time = perf_counter() - authors_start
                     self.logger.debug(f"Related authors fetch took: {authors_time:.3f}s")
             
-            if 'concepts' in self.related_entities and entity.get("_concept_ids"):
+            if 'concepts' in self.related_entities and 'concepts' in include_entities and entity.get("_concept_ids"):
                 concepts_start = perf_counter() if self.verbose else None
                 if self.verbose:
                     self.logger.debug(f"Fetching {len(entity['_concept_ids'])} related concepts")
