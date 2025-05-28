@@ -19,8 +19,7 @@ class ESIndex:
 
     async def initialize(self):
         """Initialize Elasticsearch indices and mappings"""
-        # ignore "works", "authors", "concepts", "institutions",  "sources" while experimenting
-        indices = ["publishers"]
+        indices = ["publishers", "concepts", "institutions",  "sources", "works", "authors"]
         
         for index in indices:
             index_name = f"{self.index_prefix}_{index}"

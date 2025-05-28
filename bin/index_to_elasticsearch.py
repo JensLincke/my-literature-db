@@ -27,7 +27,9 @@ async def index_collection(db, es_index, collection_name: str, batch_size: int =
             "id": doc["id"],
             "display_name": doc["display_name"]
         }
-        
+        if collection_name == "works":
+            simple_doc["display_name"] = doc.get("search_blob")
+
         # Add document to batch
         batch.append((doc["id"], simple_doc))
         
@@ -66,8 +68,7 @@ async def main():
         await es_index.initialize()
         
         # Collections to index
-        # ignore "works", "authors", "concepts", "institutions",  "sources" while experimenting
-        collections = ["publishers"]
+        collections = ["publishers", "works", "authors", "concepts", "institutions",  "sources" ]
         
         # Index each collection
         for collection in collections:
