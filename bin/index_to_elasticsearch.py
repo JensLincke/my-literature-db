@@ -52,7 +52,6 @@ async def index_collection(db, es_index, collection_name: str, batch_size: int =
             
         indexed = 0
         batch = []
-        chunk_size = 2  # Process 2 documents at a time within a batch
         
         async for doc in cursor:
             # Create simplified document with only needed fields
@@ -67,26 +66,14 @@ async def index_collection(db, es_index, collection_name: str, batch_size: int =
             batch.append((doc["id"], simple_doc))
             
             if len(batch) >= batch_size:
-                # Process batch in smaller chunks to avoid too many concurrent requests
-                for i in range(0, len(batch), chunk_size):
-                    chunk = batch[i:i + chunk_size]
-                    try:
-                        tasks = [
-                            es_index.index_document(collection_name, doc_id, document)
-                            for doc_id, document in chunk
-                        ]
-                        await asyncio.gather(*tasks)
-                        
-                        # Small delay between chunks to prevent overwhelming Elasticsearch
-                        await asyncio.sleep(0.01)
-                    except Exception as e:
-                        print(f"Error indexing chunk in {collection_name}: {e}")
-                        # Wait a bit longer on error before retrying
-                        await asyncio.sleep(1)
-                        continue
+                try:
+                    success, failed = await es_index.bulk_index_documents(collection_name, batch)
+                    indexed += len(batch)
+                    print(f"Indexed {indexed}/{total_docs} documents in {collection_name}")
+                except Exception as e:
+                    print(f"Error bulk indexing in {collection_name}: {e}")
+                    await asyncio.sleep(1)  # Wait a bit on error before continuing
                 
-                indexed += len(batch)
-                print(f"Indexed {indexed}/{total_docs} documents in {collection_name}")
                 batch = []
                 
                 # Check if we've reached the limit
@@ -95,19 +82,13 @@ async def index_collection(db, es_index, collection_name: str, batch_size: int =
         
         # Index remaining documents
         if batch:
-            for i in range(0, len(batch), chunk_size):
-                chunk = batch[i:i + chunk_size]
-                try:
-                    tasks = [
-                        es_index.index_document(collection_name, doc_id, document)
-                        for doc_id, document in chunk
-                    ]
-                    await asyncio.gather(*tasks)
-                    await asyncio.sleep(0.1)
-                except Exception as e:
-                    print(f"Error indexing final chunk in {collection_name}: {e}")
-                    await asyncio.sleep(1)
-                    continue
+            try:
+                success, failed = await es_index.bulk_index_documents(collection_name, batch)
+                indexed += len(batch)
+                print(f"Indexed {indexed}/{total_docs} documents in {collection_name}")
+            except Exception as e:
+                print(f"Error indexing final batch in {collection_name}: {e}")
+                await asyncio.sleep(1)
             
             indexed += len(batch)
             print(f"Indexed {indexed}/{total_docs} documents in {collection_name}")
