@@ -117,15 +117,15 @@ async def startup_db_client():
     
     # Initialize handlers for each entity type
     handlers["works"] = WorksHandler(db.works, "work")
-    handlers["authors"] = BaseEntityHandler(db.authors, "Author")
-    handlers["concepts"] = BaseEntityHandler(db.concepts, "Concept")
-    handlers["institutions"] = BaseEntityHandler(db.institutions, "Institution")
-    handlers["publishers"] = BaseEntityHandler(db.publishers, "Publisher")
-    handlers["sources"] = BaseEntityHandler(db.sources, "Source")
-    handlers["topics"] = BaseEntityHandler(db.topics, "Topic")
-    handlers["fields"] = BaseEntityHandler(db.fields, "Field")
-    handlers["subfields"] = BaseEntityHandler(db.subfields, "Subfield")
-    handlers["domains"] = BaseEntityHandler(db.domains, "Domain")
+    handlers["authors"] = BaseEntityHandler(db.authors, "authors")
+    handlers["concepts"] = BaseEntityHandler(db.concepts, "concepts")
+    handlers["institutions"] = BaseEntityHandler(db.institutions, "institutions")
+    handlers["publishers"] = BaseEntityHandler(db.publishers, "publishers")
+    handlers["sources"] = BaseEntityHandler(db.sources, "sources")
+    handlers["topics"] = BaseEntityHandler(db.topics, "topics")
+    handlers["fields"] = BaseEntityHandler(db.fields, "fields")
+    handlers["subfields"] = BaseEntityHandler(db.subfields, "subfields")
+    handlers["domains"] = BaseEntityHandler(db.domains, "domains")
     
     # Register all entity routers
     create_entity_routers(app, db, handlers, jsonable_encoder)

@@ -47,7 +47,7 @@ class ESIndex:
 
     async def index_document(self, index: str, doc_id: str, document: dict):
         """Index a document in Elasticsearch"""
-        index_name = f"{self.index_prefix}_{index}"
+        index_name = f"{self.index_prefix}_{index}".lower()
         try:
             await self.client.index(
                 index=index_name,
@@ -62,9 +62,9 @@ class ESIndex:
         """Search documents in Elasticsearch"""
         index_name = f"{self.index_prefix}_{index}"
         
-        # Build the search query for strict full text search
+        # Build the search query
         search_body = {
-            "query": {
+            "query": query if isinstance(query, dict) else {
                 "simple_query_string": {
                     "query": query,
                     "fields": ["display_name"],
@@ -83,18 +83,34 @@ class ESIndex:
 
         # Add filters if provided
         if filter_query:
+            original_query = search_body["query"]
             search_body["query"] = {
                 "bool": {
-                    "must": [search_body["query"]],
+                    "must": original_query,
                     "filter": filter_query
                 }
             }
 
         try:
+            # Convert to lowercase to ensure consistent index naming
+            index_name = index_name.lower()
             result = await self.client.search(
                 index=index_name,
                 body=search_body
             )
+            
+            # Format the response to match our API's structure
+            hits = result["hits"]
+            return {
+                "total": hits["total"]["value"],
+                "results": [
+                    {
+                        "id": hit["_id"],
+                        "score": hit["_score"],
+                        **hit["_source"]
+                    } for hit in hits["hits"]
+                ]
+            }
             
             hits = result["hits"]["hits"]
             total = result["hits"]["total"]["value"]

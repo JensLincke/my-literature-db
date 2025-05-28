@@ -126,13 +126,14 @@ class BaseEntityHandler:
         return entity
 
 
-    async def search_elasticsearch(query):
-        result = await esindex.search(
-            index=self.entity_type,
-            query=search_params.q,
-            skip=search_params.skip,
-            limit=search_params.limit,
-            filter_query=filter_query
+    async def search_elasticsearch(self, query, skip, limit):
+        # Convert to lowercase plural form to match the router and ES index naming
+        index_name = self.entity_name.lower() + "s" if not self.entity_name.lower().endswith('s') else self.entity_name.lower()
+        result = await self.esindex.search(
+            index=index_name,
+            query=query,
+            skip=skip,
+            limit=limit
         )
         return result
 
@@ -149,6 +150,8 @@ class BaseEntityHandler:
         select_param: Optional[str] = None
     ) -> Dict[str, Any]:
         """Generic method for text search across entities"""
+        logger = self.logger
+
         if self.verbose():
             start_time = perf_counter()
             self.logger.debug(f"Starting search with query: '{q}'")
@@ -157,62 +160,95 @@ class BaseEntityHandler:
                 self.logger.debug(f"Filter query: {filter_query}")
             
         try:
-            # Ensure the query is not empty
-            # Basic text search query
-            search_query = {"$text": {"$search": q}}
-            
-            if self.verbose():
-                self.logger.debug(f"Initial text search query: {search_query}")
-            
-            # Add any filter conditions
-            if filter_query:
-                # Combine text search with filter using $and
-                search_query = {"$and": [search_query, filter_query]}
+            documents = []
+            logger.debug(f"SEARCH " + self.entity_name)
+            if self.entity_name == "publishers":
+                logger.debug(f"Use Elasticsearch")
+                found = await self.search_elasticsearch(
+                    query={"match": {"display_name": q}},
+                    skip=skip,
+                    limit=limit
+                )
+                total = found["total"]
+                has_more = total > (skip + limit)
+                
+                # Get the IDs in ranked order from Elasticsearch
+                ids = [doc["id"] for doc in found["results"]]
+                
+                # Get documents from MongoDB while preserving Elasticsearch order
+                mongo_docs = {}
+                async for doc in self.collection.find({"id": {"$in": ids}}, projection):
+                    mongo_docs[doc["id"]] = doc
+                
+                # Preserve the order from Elasticsearch results
+                documents = []
+                for id in ids:
+                    if id in mongo_docs:
+                        doc = mongo_docs[id]
+                        # Add the search score from Elasticsearch
+                        es_doc = next((d for d in found["results"] if d["id"] == id), None)
+                        if es_doc:
+                            doc["_score"] = es_doc["score"]
+                        documents.append(doc)
+            else:
+                logger.debug(f"Use Basic Search")
+                # Ensure the query is not empty
+                # Basic text search query
+                search_query = {"$text": {"$search": q}}
+                
                 if self.verbose():
-                    self.logger.debug(f"Combined search query with filters: {search_query}")
-            
-            # Ensure projection exists
-            if not projection:
-                projection = {}
-            
-            # Override with select parameter if provided
-            if select_param:
-                projection = parse_select_param(select_param)
-            
-            # Add scoring if needed
-            use_scoring = explain_score or (sort_param and "relevance_score" in sort_param)
-            if use_scoring and "score" not in projection:
-                projection["score"] = {"$meta": "textScore"}
+                    logger.debug(f"Initial text search query: {search_query}")
+                
+                # Add any filter conditions
+                if filter_query:
+                    # Combine text search with filter using $and
+                    search_query = {"$and": [search_query, filter_query]}
+                    if self.verbose():
+                        logger.debug(f"Combined search query with filters: {search_query}")
+                
+                # Ensure projection exists
+                if not projection:
+                    projection = {}
+                
+                # Override with select parameter if provided
+                if select_param:
+                    projection = parse_select_param(select_param)
+                
+                # Add scoring if needed
+                use_scoring = explain_score or (sort_param and "relevance_score" in sort_param)
+                if use_scoring and "score" not in projection:
+                    projection["score"] = {"$meta": "textScore"}
 
-            self.logger.debug(f"start finding")
+                logger.debug(f"start finding")
 
-            # Create cursor first
-            cursor = self.collection.find(search_query, projection)
-            
-            # Instead of getting exact count, use limit+1 to check if there are more results
-            total_cursor = self.collection.find(search_query).limit(limit + skip + 1)
-            total_docs = await total_cursor.to_list(None)
-            total = len(total_docs)
-            has_more = total > (limit + skip)
-            
-            self.logger.debug(f"found something")
+                # Create cursor first
+                cursor = self.collection.find(search_query, projection)
+                
+                # Instead of getting exact count, use limit+1 to check if there are more results
+                total_cursor = self.collection.find(search_query).limit(limit + skip + 1)
+                total_docs = await total_cursor.to_list(None)
+                total = len(total_docs)
+                has_more = total > (limit + skip)
+                
+                logger.debug(f"found something")
 
-            # Add sorting if specified
-            if sort_param:
-                sort_specs = parse_sort_param(sort_param, self.entity_name)
-                for field, direction in sort_specs:
-                    if field != "relevance_score":
-                        cursor = cursor.sort(field, direction)
-            elif use_scoring:
-                # Default to score-based sorting if scoring is enabled
-                cursor = cursor.sort([("score", {"$meta": "textScore"})])
+                # Add sorting if specified
+                if sort_param:
+                    sort_specs = parse_sort_param(sort_param, self.entity_name)
+                    for field, direction in sort_specs:
+                        if field != "relevance_score":
+                            cursor = cursor.sort(field, direction)
+                elif use_scoring:
+                    # Default to score-based sorting if scoring is enabled
+                    cursor = cursor.sort([("score", {"$meta": "textScore"})])
+                
+                if self.verbose():
+                    logger.debug(f"Fetching documents with skip={skip}, limit={limit}")
+                
+                # Get results using the documents we already fetched
+                documents = total_docs[skip:skip + limit] if total_docs else []
             
-            if self.verbose():
-                self.logger.debug(f"Fetching documents with skip={skip}, limit={limit}")
-            
-            # Get results using the documents we already fetched
-            documents = total_docs[skip:skip + limit] if total_docs else []
-            
+
             if not documents:
                 return {
                     "total": 0,
@@ -223,11 +259,11 @@ class BaseEntityHandler:
                 }
                             
             if self.verbose():
-                self.logger.debug(f"Retrieved {len(documents)} documents")
+                logger.debug(f"Retrieved {len(documents)} documents")
             
             if explain_score:
                 if self.verbose():
-                    self.logger.debug("Adding score explanations to documents")
+                    logger.debug("Adding score explanations to documents")
                 for doc in documents:
                     doc["_score_explanation"] = {
                         "score": doc.get("score", 0),
@@ -244,14 +280,14 @@ class BaseEntityHandler:
 
             if self.verbose():
                 total_time = perf_counter() - start_time
-                self.logger.debug(f"Search completed in {total_time:.3f}s")
-                self.logger.debug(f"Retrieved {len(documents)} documents, has_more={has_more}")
+                logger.debug(f"Search completed in {total_time:.3f}s")
+                logger.debug(f"Retrieved {len(documents)} documents, has_more={has_more}")
 
             return result
 
         except Exception as e:
             if self.verbose():
-                self.logger.error(f"Search failed: {str(e)}")
+                logger.error(f"Search failed: {str(e)}")
             raise HTTPException(
                 status_code=503,
                 detail=f"Text search is not available - the search index is still being built. Error: {str(e)}"
