@@ -7,6 +7,8 @@ from pymongo import DESCENDING
 import logging
 from time import perf_counter
 
+from elastic_index import ESIndex
+
 from filter_utils import parse_filter_param, parse_sort_param, parse_select_param, parse_group_by_param
 
 class BaseEntityHandler:
@@ -15,6 +17,7 @@ class BaseEntityHandler:
     def __init__(self, collection: AsyncIOMotorCollection, entity_name: str):
         self.collection = collection
         self.entity_name = entity_name
+        self.esindex = ESIndex()
         self.logger = logging.getLogger(f"handlers.{entity_name}")
         
     def verbose(self) -> bool:
@@ -122,14 +125,26 @@ class BaseEntityHandler:
                 )
         return entity
 
+
+    async def search_elasticsearch(query):
+        result = await esindex.search(
+            index=self.entity_type,
+            query=search_params.q,
+            skip=search_params.skip,
+            limit=search_params.limit,
+            filter_query=filter_query
+        )
+        return result
+
+
     async def search_entities(
         self,
         q: str,
         skip: int = 0,
         limit: int = 10,
         explain_score: bool = False,
-        filter_query: Dict = None,
-        projection: Dict = None,
+        filter_query: Optional[Dict[str, Any]] = None,
+        projection: Optional[Dict[str, Any]] = None,
         sort_param: Optional[str] = None,
         select_param: Optional[str] = None
     ) -> Dict[str, Any]:
@@ -142,6 +157,7 @@ class BaseEntityHandler:
                 self.logger.debug(f"Filter query: {filter_query}")
             
         try:
+            # Ensure the query is not empty
             # Basic text search query
             search_query = {"$text": {"$search": q}}
             
@@ -170,10 +186,16 @@ class BaseEntityHandler:
 
             self.logger.debug(f"start finding")
 
-            # Create cursor
+            # Create cursor first
             cursor = self.collection.find(search_query, projection)
             
-            self.logger.debug(f"found somthing")
+            # Instead of getting exact count, use limit+1 to check if there are more results
+            total_cursor = self.collection.find(search_query).limit(limit + skip + 1)
+            total_docs = await total_cursor.to_list(None)
+            total = len(total_docs)
+            has_more = total > (limit + skip)
+            
+            self.logger.debug(f"found something")
 
             # Add sorting if specified
             if sort_param:
@@ -188,19 +210,8 @@ class BaseEntityHandler:
             if self.verbose():
                 self.logger.debug(f"Fetching documents with skip={skip}, limit={limit}")
             
-            # Get results
-            try:
-                documents = await cursor.skip(skip).limit(limit + 1).to_list(None)
-            except Exception as e:
-                if self.verbose():
-                    self.logger.error(f"Error fetching documents: {str(e)}")
-                return {
-                    "total": 0,
-                    "skip": skip,
-                    "limit": limit,
-                    "results": [],
-                    "message": f"Error: {str(e)}."
-                }
+            # Get results using the documents we already fetched
+            documents = total_docs[skip:skip + limit] if total_docs else []
             
             if not documents:
                 return {
@@ -210,12 +221,7 @@ class BaseEntityHandler:
                     "results": [],
                     "message": f"No matching {self.entity_name}s found. Try different search terms."
                 }
-                
-            # If we got more documents than limit, there are more pages
-            has_more = len(documents) > limit
-            if has_more:
-                documents = documents[:limit]  # Remove the extra document
-                
+                            
             if self.verbose():
                 self.logger.debug(f"Retrieved {len(documents)} documents")
             
@@ -229,6 +235,7 @@ class BaseEntityHandler:
                     }
             
             result = {
+                "total": total,
                 "skip": skip,
                 "limit": limit,
                 "has_more": has_more,
@@ -254,7 +261,7 @@ class BaseEntityHandler:
         self,
         group_by: str,
         filter_param: Optional[str] = None,
-        extra_filters: Dict = None
+        extra_filters: Optional[Dict[str, Any]] = None
     ) -> Dict[str, Any]:
         """Group entities by a specified field and return counts"""
         query = {}
@@ -308,8 +315,8 @@ class WorksHandler(BaseEntityHandler):
         skip: int = 0,
         limit: int = 10,
         explain_score: bool = False,
-        filter_query: Dict = None,
-        projection: Dict = None,
+        filter_query: Optional[Dict[str, Any]] = None,
+        projection: Optional[Dict[str, Any]] = None,
         sort_param: Optional[str] = None,
         select_param: Optional[str] = None
     ) -> Dict[str, Any]:
@@ -325,11 +332,13 @@ class WorksHandler(BaseEntityHandler):
             }
         
 
-        projection ["search_blob"] = 1
+        if projection:
+            projection["search_blob"] = 1
 
         # Add text score only if needed for sorting or score explanation
         if explain_score or (sort_param and "relevance_score" in sort_param):
-            projection["score"] = {"$meta": "textScore"}
+            if projection:
+                projection["score"] = {"$meta": "textScore"}
             
         result = await super().search_entities(
             q=q,

@@ -12,7 +12,6 @@ from bson.objectid import ObjectId
 from motor.motor_asyncio import AsyncIOMotorDatabase
 from pymongo import DESCENDING
 from time import perf_counter
-from bin.elastic_index import ESHandler
 
 from handlers import BaseEntityHandler, WorksHandler
 from filter_utils import parse_filter_param
@@ -39,7 +38,6 @@ class EntityRouter:
         sort_field: str = "works_count",
         related_entities: List[str] = None,
         jsonable_encoder: Callable = None,
-        es_handler: ESHandler = None,
     ):
         self.router = router
         self.db = db
@@ -51,7 +49,6 @@ class EntityRouter:
         self.sort_field = sort_field
         self.related_entities = related_entities or []
         self.jsonable_encoder = jsonable_encoder
-        self.es_handler = es_handler
         
         # Get logger for this entity type
         self.logger = logging.getLogger(f"entity_router.{entity_type}")
@@ -141,7 +138,6 @@ class EntityRouter:
                 sort: Optional[str] = Query(None, description="Sort parameter (defaults to relevance score)"),
                 select: Optional[str] = Query(None, description="Fields to return")
             ):
-                """Search entities using Elasticsearch"""
                 if self.verbose:
                     start_time = perf_counter()
                     self.logger.debug(f"Starting search for {self.entity_name_plural}")
@@ -152,27 +148,16 @@ class EntityRouter:
                 filter_query = parse_filter_param(filter) if filter else None
                 
                 try:
-                    if self.es_handler:
-                        # Use Elasticsearch for search
-                        result = await self.es_handler.search(
-                            index=self.entity_type,
-                            query=search_params.q,
-                            skip=search_params.skip,
-                            limit=search_params.limit,
-                            filter_query=filter_query
-                        )
-                    else:
-                        # Fallback to MongoDB text search
-                        result = await self.handlers[self.entity_type].search_entities(
-                            q=search_params.q,
-                            skip=search_params.skip,
-                            limit=search_params.limit,
-                            explain_score=search_params.explain_score,
-                            filter_query=filter_query,
-                            projection=None,
-                            sort_param=sort,
-                            select_param=select
-                        )
+                    result = await self.handlers[self.entity_type].search_entities(
+                        q=search_params.q,
+                        skip=search_params.skip,
+                        limit=search_params.limit,
+                        explain_score=search_params.explain_score,
+                        filter_query=filter_query,
+                        projection=None,
+                        sort_param=sort,
+                        select_param=select
+                    )
                     
                     if self.verbose:
                         total_time = perf_counter() - start_time
