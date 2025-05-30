@@ -166,7 +166,7 @@ class BaseEntityHandler:
             if self.useElasticSearch:
                 logger.debug(f"Use Elasticsearch")
                 found = await self.search_elasticsearch(
-                    query={"match": {"display_name": q}},
+                    query=q,  # Pass the raw query string to let elastic_index handle the query construction
                     skip=skip,
                     limit=limit
                 )

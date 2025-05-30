@@ -34,12 +34,23 @@ class ESIndex:
                 await self.client.indices.create(
                     index=index_name,
                     body={
+                        "settings": {
+                            "analysis": {
+                                "analyzer": {
+                                    "exact_match": {
+                                        "tokenizer": "standard",
+                                        "filter": ["lowercase"]
+                                    }
+                                }
+                            }
+                        },
                         "mappings": {
                             "properties": {
                                 "id": {"type": "keyword"},
                                 "display_name": {
                                     "type": "text",
-                                    "analyzer": "standard",
+                                    "analyzer": "exact_match",
+                                    "search_analyzer": "exact_match",
                                     "fields": {
                                         "keyword": {"type": "keyword"}
                                     }
@@ -107,22 +118,53 @@ class ESIndex:
             logger.error(f"Error in bulk indexing: {e}")
             raise
 
-    async def search(self, index: str, query: str, skip: int = 0, limit: int = 10, filter_query: dict = None):
+    async def search(self, index: str, query: str, skip: int = 0, limit: int = 10, filter_query: dict | None = None):
         """Search documents in Elasticsearch"""
         index_name = f"{self.index_prefix}_{index}"
         
-        # Build the search query
-        # Build query based on input type
-        query_body = query if isinstance(query, dict) else {
-            "simple_query_string": {
-                "query": query,
-                "fields": ["display_name"],
-                "default_operator": "and",  # Force AND operation between terms
-                "analyze_wildcard": False,  # Disable wildcard analysis
-                "auto_generate_synonyms_phrase_query": False,  # Disable automatic phrase queries
-                "flags": "PHRASE|PRECEDENCE|AND|NOT|OR|WHITESPACE"  # Enable exact phrase matching with quotes
-            }
-        } if query else {"match_all": {}}
+        print("Elasticsearch input:", {
+            "query": query,
+            "index": index_name,
+            "skip": skip,
+            "limit": limit
+        })
+
+        # Build the search query based on input type
+        if isinstance(query, dict):
+            query_body = query
+        elif query:
+            # For quoted strings, use exact phrase matching
+            if query.startswith('"') and query.endswith('"'):
+                query_without_quotes = query[1:-1]
+                query_body = {
+                    "match_phrase": {
+                        "display_name": {
+                            "query": query_without_quotes,
+                            "analyzer": "exact_match",
+                            "slop": 0  # Force exact phrase match with no words in between
+                        }
+                    }
+                }
+            else:
+                # For non-quoted strings, require all terms to match
+                terms = query.split()
+                query_body = {
+                    "bool": {
+                        "must": [
+                            {
+                                "match": {
+                                    "display_name": {
+                                        "query": term,
+                                        "analyzer": "exact_match"
+                                    }
+                                }
+                            }
+                            for term in terms
+                        ]
+                    }
+                }
+        else:
+            query_body = {"match_all": {}}
 
         search_body = {
             "query": query_body,
@@ -132,6 +174,8 @@ class ESIndex:
                 {"_score": {"order": "desc"}}
             ]
         }
+        
+        print("Elasticsearch query body:", search_body)
 
         # Add filters if provided
         if filter_query:
