@@ -193,3 +193,60 @@ class ESIndex:
             logger.info(f"Deleted index: {index_name}")
         else:
             logger.warning(f"Index {index_name} does not exist")
+
+    async def get_indices_status(self):
+        """Get status information about all indices"""
+        try:
+            response = await self.client.cat.indices(
+                index=f"{self.index_prefix}_*",
+                format="json",
+                v=True,
+                s="index",
+                h="health,status,index,uuid,pri,rep,docs.count,docs.deleted,store.size,pri.store.size"
+            )
+            return response
+        except Exception as e:
+            logger.error(f"Error getting indices status: {e}")
+            raise
+
+    async def get_sample_documents(self, index: str | None = None, limit: int = 10):
+        """Get sample documents from one or all indices
+        
+        Args:
+            index: Optional specific index to sample from
+            limit: Number of documents to return per index
+        """
+        try:
+            results = {}
+            indices = [index] if index else ["publishers", "concepts", "institutions", "sources", "works", "authors"]
+            
+            for idx in indices:
+                index_name = f"{self.index_prefix}_{idx}"
+                if await self.client.indices.exists(index=index_name):
+                    # For large collections, use a random sampling approach
+                    response = await self.client.search(
+                        index=index_name,
+                        body={
+                            "query": {
+                                "function_score": {
+                                    "query": {"match_all": {}},
+                                    "random_score": {},  # Random scoring
+                                    "boost_mode": "replace"  # Replace normal scoring with random
+                                }
+                            },
+                            "size": limit,
+                            "track_total_hits": False  # Optimize performance for large indices
+                        }
+                    )
+                    results[idx] = [
+                        {
+                            "id": hit["_id"],
+                            **hit["_source"]
+                        } for hit in response["hits"]["hits"]
+                    ]
+                else:
+                    results[idx] = []
+            return results
+        except Exception as e:
+            logger.error(f"Error getting sample documents: {e}")
+            raise

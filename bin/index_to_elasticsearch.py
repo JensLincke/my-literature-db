@@ -2,11 +2,14 @@
 Script to index MongoDB data into Elasticsearch
 
 Usage:
-    python index_to_elasticsearch.py [--limit LIMIT] [--wipe COLLECTIONS]
+    python index_to_elasticsearch.py [--limit LIMIT] [--wipe COLLECTIONS] [--list] [--sample [COLLECTION]]
 
 Options:
     --limit LIMIT           Limit the number of entries per collection to index (for testing)
     --wipe COLLECTIONS      Wipe specific collections (comma-separated) or 'all' for all collections
+    --list                 List all Elasticsearch indices and their status
+    --sample               Show sample documents from all indices (use --limit to control sample size)
+    --collection COL       Limit sample to specific collection
 """
 
 import asyncio
@@ -130,6 +133,56 @@ async def confirm_wipe(collections_to_wipe):
     response = input("\nAre you sure you want to wipe these collections? This action cannot be undone. [y/N] ").lower()
     return response in ['y', 'yes']
 
+async def print_indices_status(es_index):
+    """Print status of all Elasticsearch indices"""
+    try:
+        indices = await es_index.get_indices_status()
+        
+        # Print header
+        print("{:<7} {:<7} {:<21} {:<22} {:<4} {:<4} {:<11} {:<12} {:<11} {:<11}".format(
+            "health", "status", "index", "uuid", "pri", "rep", "docs.count", "docs.deleted", "store.size", "pri.store.size"
+        ))
+        
+        # Print each index's information
+        for index in indices:
+            print("{:<7} {:<7} {:<21} {:<22} {:<4} {:<4} {:<11} {:<12} {:<11} {:<11}".format(
+                index["health"],
+                index["status"],
+                index["index"],
+                index["uuid"],
+                index["pri"],
+                index["rep"],
+                index["docs.count"],
+                index["docs.deleted"],
+                index["store.size"],
+                index["pri.store.size"]
+            ))
+    except Exception as e:
+        logger.error(f"Error listing indices: {e}")
+
+async def print_sample_documents(es_index, collection: str | None = None, limit: int = 10):
+    """Print sample documents from indices"""
+    try:
+        samples = await es_index.get_sample_documents(collection, limit)
+        
+        for index_name, docs in samples.items():
+            if not docs:
+                print(f"\n{index_name}: No documents found")
+                continue
+                
+            print(f"\n{index_name} ({len(docs)} samples):")
+            print("-" * 80)
+            
+            for doc in docs:
+                print(f"ID: {doc['id']}")
+                for key, value in doc.items():
+                    if key != 'id':
+                        print(f"{key}: {value}")
+                print("-" * 40)
+            
+    except Exception as e:
+        logger.error(f"Error showing sample documents: {e}")
+
 async def main():
     # Parse command line arguments
     parser = argparse.ArgumentParser(description="Index MongoDB data into Elasticsearch")
@@ -137,12 +190,28 @@ async def main():
                        help="Limit the number of entries per collection to index (for testing)")
     parser.add_argument("--wipe", type=str,
                        help="Wipe specific collections (comma-separated) or 'all' for all collections")
+    parser.add_argument("--list", action="store_true",
+                       help="List all Elasticsearch indices and their status")
+    parser.add_argument("--sample", action="store_true",
+                       help="Show sample documents from indices")
+    parser.add_argument("--collection", type=str,
+                       help="Specific collection to sample from")
     args = parser.parse_args()
     
     # Initialize Elasticsearch handler
     es_index = ESIndex()
     mongo_client = None
+    
     try:
+        # Handle informational commands first
+        if args.list:
+            await print_indices_status(es_index)
+            return
+        
+        if args.sample:
+            await print_sample_documents(es_index, args.collection, args.limit or 10)
+            return
+            
         # Handle wipe request if specified
         if args.wipe:
             collections_to_wipe = [c.strip() for c in args.wipe.split(",")]
