@@ -2,10 +2,11 @@
 Script to index MongoDB data into Elasticsearch
 
 Usage:
-    python index_to_elasticsearch.py [--limit LIMIT]
+    python index_to_elasticsearch.py [--limit LIMIT] [--wipe COLLECTIONS]
 
 Options:
-    --limit LIMIT  Limit the number of entries per collection to index (for testing)
+    --limit LIMIT           Limit the number of entries per collection to index (for testing)
+    --wipe COLLECTIONS      Wipe specific collections (comma-separated) or 'all' for all collections
 """
 
 import asyncio
@@ -18,7 +19,7 @@ from elastic_index import ESIndex
 logging.basicConfig(level=logging.WARNING)
 logger = logging.getLogger(__name__)
 
-async def index_collection(db, es_index, collection_name: str, batch_size: int = 1000, limit: int = None):
+async def index_collection(db, es_index, collection_name: str, batch_size: int = 1000, limit: int | None = None):
     """Index a MongoDB collection into Elasticsearch
     
     Args:
@@ -41,7 +42,7 @@ async def index_collection(db, es_index, collection_name: str, batch_size: int =
         # Configure cursor with optimized settings for large collections
         cursor = collection.find(
             {}, 
-            {"id": 1, "display_name": 1},
+            {"id": 1, "display_name": 1, "search_blob": 1},
             batch_size=batch_size,
             no_cursor_timeout=True,  # Prevent cursor from timing out
             allow_disk_use=True,     # Allow using disk for large result sets
@@ -93,27 +94,84 @@ async def index_collection(db, es_index, collection_name: str, batch_size: int =
             indexed += len(batch)
             print(f"Indexed {indexed}/{total_docs} documents in {collection_name}")
 
+async def wipe_collections(es_index, collections_to_wipe):
+    """Wipe specified collections from Elasticsearch
+    
+    Args:
+        es_index: Elasticsearch index instance
+        collections_to_wipe: List of collection names to wipe
+    """
+    all_collections = ["publishers", "concepts", "institutions", "sources", "works", "authors"]
+    
+    # If 'all' is specified, wipe all collections
+    if "all" in collections_to_wipe:
+        collections_to_wipe = all_collections
+    
+    for collection in collections_to_wipe:
+        if collection not in all_collections:
+            logger.warning(f"Unknown collection: {collection}")
+            continue
+        
+        print(f"Wiping collection: {collection}")
+        try:
+            await es_index.delete_index(collection)
+        except Exception as e:
+            logger.error(f"Error wiping {collection}: {e}")
+
+async def confirm_wipe(collections_to_wipe):
+    """Ask for confirmation before wiping collections"""
+    if "all" in collections_to_wipe:
+        print("\nYou are about to wipe ALL collections from Elasticsearch!")
+    else:
+        print(f"\nYou are about to wipe the following collections from Elasticsearch:")
+        for collection in collections_to_wipe:
+            print(f"- {collection}")
+            
+    response = input("\nAre you sure you want to wipe these collections? This action cannot be undone. [y/N] ").lower()
+    return response in ['y', 'yes']
+
 async def main():
     # Parse command line arguments
     parser = argparse.ArgumentParser(description="Index MongoDB data into Elasticsearch")
     parser.add_argument("--limit", type=int, 
                        help="Limit the number of entries per collection to index (for testing)")
+    parser.add_argument("--wipe", type=str,
+                       help="Wipe specific collections (comma-separated) or 'all' for all collections")
     args = parser.parse_args()
-    
-    # Initialize MongoDB client
-    mongo_client = AsyncIOMotorClient("mongodb://localhost:27017")
-    db = mongo_client.openalex
     
     # Initialize Elasticsearch handler
     es_index = ESIndex()
-    
-    cursors = []  # Keep track of cursors for cleanup
+    mongo_client = None
     try:
-        # Initialize Elasticsearch indices
-        await es_index.initialize()
+        # Handle wipe request if specified
+        if args.wipe:
+            collections_to_wipe = [c.strip() for c in args.wipe.split(",")]
+            if await confirm_wipe(collections_to_wipe):
+                await wipe_collections(es_index, collections_to_wipe)
+                if not collections_to_wipe or "all" in collections_to_wipe:
+                    # If we wiped everything, we need to re-initialize
+                    await es_index.initialize()
+            else:
+                print("Wipe cancelled")
+                if not input("\nDo you want to continue with indexing? [y/N] ").lower() in ['y', 'yes']:
+                    print("Indexing cancelled")
+                    return
+        else:
+            # Initialize Elasticsearch indices
+            await es_index.initialize()
+
+        if args.wipe and not args.limit:
+            # If only wiping was requested, exit here
+            return
+
+        # Initialize MongoDB client for indexing
+        mongo_client = AsyncIOMotorClient("mongodb://localhost:27017")
+        db = mongo_client.openalex
+        
+        cursors = []  # Keep track of cursors for cleanup
         
         # Collections to index
-        collections = ["publishers", "concepts", "institutions", "sources", "works", "authors" ]
+        collections = ["publishers", "concepts", "institutions", "sources", "works", "authors"]
         
         # Index each collection
         for collection in collections:
@@ -130,11 +188,12 @@ async def main():
                         cursor.close()
                     except:
                         pass
-        
     finally:
         # Clean up
-        await es_index.close()
-        mongo_client.close()
+        if es_index:
+            await es_index.close()
+        if mongo_client:
+            mongo_client.close()
 
 if __name__ == "__main__":
     asyncio.run(main())

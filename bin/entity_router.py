@@ -13,7 +13,7 @@ from motor.motor_asyncio import AsyncIOMotorDatabase
 from pymongo import DESCENDING
 from time import perf_counter
 
-from handlers import BaseEntityHandler, WorksHandler
+from handlers import BaseEntityHandler
 from filter_utils import parse_filter_param
 from api_utils import (
     PaginationParams, SearchParams, entity_list_description, entity_get_description,

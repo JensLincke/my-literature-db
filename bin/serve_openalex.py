@@ -26,7 +26,7 @@ from motor.motor_asyncio import AsyncIOMotorClient
 from pymongo import DESCENDING
 from bson import ObjectId
 
-from handlers import BaseEntityHandler, WorksHandler
+from handlers import BaseEntityHandler
 from api_utils import MAX_RESULTS_PER_PAGE
 from entity_router import create_entity_routers
 
@@ -116,7 +116,7 @@ async def startup_db_client():
     db = client.openalex
     
     # Initialize handlers for each entity type
-    handlers["works"] = WorksHandler(db.works, "work")
+    handlers["works"] = BaseEntityHandler(db.works, "work")
     handlers["authors"] = BaseEntityHandler(db.authors, "authors")
     handlers["concepts"] = BaseEntityHandler(db.concepts, "concepts")
     handlers["institutions"] = BaseEntityHandler(db.institutions, "institutions")

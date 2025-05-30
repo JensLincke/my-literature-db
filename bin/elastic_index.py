@@ -151,6 +151,8 @@ class ESIndex:
                 body=search_body
             )
             
+            print(f"Search in {index_name} for query '{query}' returned {result['hits']['total']['value']} results")
+
             # Format the response to match our API's structure
             hits = result["hits"]
             return {
@@ -182,3 +184,12 @@ class ESIndex:
     async def close(self):
         """Close the Elasticsearch client"""
         await self.client.close()
+
+    async def delete_index(self, index: str):
+        """Delete an Elasticsearch index"""
+        index_name = f"{self.index_prefix}_{index}"
+        if await self.client.indices.exists(index=index_name):
+            await self.client.indices.delete(index=index_name)
+            logger.info(f"Deleted index: {index_name}")
+        else:
+            logger.warning(f"Index {index_name} does not exist")

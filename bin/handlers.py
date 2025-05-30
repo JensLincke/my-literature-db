@@ -19,6 +19,7 @@ class BaseEntityHandler:
         self.entity_name = entity_name
         self.esindex = ESIndex()
         self.logger = logging.getLogger(f"handlers.{entity_name}")
+        self.useElasticSearch = True  # Set to False to disable Elasticsearch usage
         
     def verbose(self) -> bool:
         """Returns whether debug logging is enabled"""
@@ -162,7 +163,7 @@ class BaseEntityHandler:
         try:
             documents = []
             logger.debug(f"SEARCH " + self.entity_name)
-            if self.entity_name == "publishers":
+            if self.useElasticSearch:
                 logger.debug(f"Use Elasticsearch")
                 found = await self.search_elasticsearch(
                     query={"match": {"display_name": q}},
@@ -337,54 +338,3 @@ class BaseEntityHandler:
                 for result in results
             ]
         }
-
-class WorksHandler(BaseEntityHandler):
-    """Handler for academic works"""
-    
-    def __init__(self, collection: AsyncIOMotorCollection, entity_name: str = "work"):
-        super().__init__(collection, entity_name)
-        self.default_sort_field = "cited_by_count"
-
-    async def search_entities(
-        self,
-        q: str,
-        skip: int = 0,
-        limit: int = 10,
-        explain_score: bool = False,
-        filter_query: Optional[Dict[str, Any]] = None,
-        projection: Optional[Dict[str, Any]] = None,
-        sort_param: Optional[str] = None,
-        select_param: Optional[str] = None
-    ) -> Dict[str, Any]:
-        """Override search_entities for works with custom projection and scoring"""
-        # Set default work-specific projection if none provided
-        if not projection:
-            projection = {
-                "title": 1,
-                "publication_year": 1,
-                "authorships": 1,
-                "type": 1,
-                "_citation_key": 1
-            }
-        
-
-        if projection:
-            projection["search_blob"] = 1
-
-        # Add text score only if needed for sorting or score explanation
-        if explain_score or (sort_param and "relevance_score" in sort_param):
-            if projection:
-                projection["score"] = {"$meta": "textScore"}
-            
-        result = await super().search_entities(
-            q=q,
-            skip=skip,
-            limit=limit,
-            explain_score=explain_score,
-            filter_query=filter_query,
-            projection=projection,
-            sort_param=sort_param,
-            select_param=select_param
-        )
-                
-        return result
