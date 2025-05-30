@@ -2,14 +2,14 @@
 Script to index MongoDB data into Elasticsearch
 
 Usage:
-    python index_to_elasticsearch.py [--limit LIMIT] [--wipe COLLECTIONS] [--list] [--sample [COLLECTION]]
+    python index_to_elasticsearch.py [--limit LIMIT] [--wipe COLLECTIONS] [--list] [--sample [COLLECTION]] [--collection COL]
 
 Options:
     --limit LIMIT           Limit the number of entries per collection to index (for testing)
     --wipe COLLECTIONS      Wipe specific collections (comma-separated) or 'all' for all collections
     --list                 List all Elasticsearch indices and their status
     --sample               Show sample documents from all indices (use --limit to control sample size)
-    --collection COL       Limit sample to specific collection
+    --collection COL       Limit operations to specific collection (for sampling, wiping, or indexing)
 """
 
 import asyncio
@@ -214,7 +214,11 @@ async def main():
             
         # Handle wipe request if specified
         if args.wipe:
-            collections_to_wipe = [c.strip() for c in args.wipe.split(",")]
+            if args.collection and "all" not in args.wipe:
+                collections_to_wipe = [args.collection]
+            else:
+                collections_to_wipe = [c.strip() for c in args.wipe.split(",")]
+            
             if await confirm_wipe(collections_to_wipe):
                 await wipe_collections(es_index, collections_to_wipe)
                 if not collections_to_wipe or "all" in collections_to_wipe:
@@ -229,7 +233,7 @@ async def main():
             # Initialize Elasticsearch indices
             await es_index.initialize()
 
-        if args.wipe and not args.limit:
+        if args.wipe and not args.limit and not args.collection:
             # If only wiping was requested, exit here
             return
 
@@ -240,7 +244,13 @@ async def main():
         cursors = []  # Keep track of cursors for cleanup
         
         # Collections to index
-        collections = ["publishers", "concepts", "institutions", "sources", "works", "authors"]
+        all_collections = ["publishers", "concepts", "institutions", "sources", "works", "authors"]
+        collections = [args.collection] if args.collection else all_collections
+        
+        # Validate collection if specified
+        if args.collection and args.collection not in all_collections:
+            logger.error(f"Invalid collection specified: {args.collection}")
+            return
         
         # Index each collection
         for collection in collections:
