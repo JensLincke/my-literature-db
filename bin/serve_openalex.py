@@ -34,7 +34,7 @@ from entity_router import create_entity_routers
 MONGO_URI = os.getenv("MONGO_URI", "mongodb://localhost:27017")
 
 # Configure logging
-logging.basicConfig(level=logging.DEBUG)
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger()
 
 # Create file handler
@@ -43,7 +43,7 @@ file_handler = logging.handlers.RotatingFileHandler(
     maxBytes=10*1024*1024,  # 10MB
     backupCount=5
 )
-file_handler.setLevel(logging.DEBUG)
+file_handler.setLevel(logging.INFO)
 
 # Create console handler
 console_handler = logging.StreamHandler()

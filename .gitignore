@@ -8,6 +8,8 @@ __pycache__/
 
 *~
 
+server.log.*
+
 # Distribution / packaging
 .Python
 build/
