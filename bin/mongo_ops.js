@@ -1,6 +1,5 @@
-#!/bin/bash
+#!/usr/bin/env mongosh
 
-mongosh --quiet --eval '
 const pad = (str, len) => (str || "").toString().padEnd(len, " ");
 const ops = db.currentOp({active: true}).inprog;
 
@@ -22,4 +21,3 @@ ops.forEach(op => {
   ];
   print(row.map((cell, i) => pad(cell, widths[i])).join(" | "));
 });
-'
