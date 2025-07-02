@@ -156,7 +156,8 @@ class TestFilterUtils(unittest.TestCase):
         test_cases = [
             ('publication_year', 'eq', 2023, {'publication_year': {'$eq': 2023}}),
             ('type', 'eq', 'journal-article', {'type': {'$eq': 'journal-article'}}),
-            ('is_oa', 'eq', True, {'is_oa': {'$eq': True}})
+            # Note: is_oa has special handling - it maps to open_access.is_oa without $eq operator
+            ('is_oa', 'eq', True, {'open_access.is_oa': True})
         ]
         
         for field, operation, value, expected in test_cases:
@@ -184,7 +185,8 @@ class TestFilterUtils(unittest.TestCase):
             ('works_count:>1000', {'works_count': {'$gt': 1000}}),
             ('publication_year:2023', {'publication_year': {'$eq': 2023}}),
             ('cited_by_count:<100', {'cited_by_count': {'$lt': 100}}),
-            ('is_oa:true', {'is_oa': {'$eq': True}})
+            # Note: is_oa maps to open_access.is_oa in the actual MongoDB structure
+            ('is_oa:true', {'open_access.is_oa': True})
         ]
         
         for filter_param, expected in test_cases:
@@ -210,8 +212,9 @@ class TestFilterUtils(unittest.TestCase):
         test_cases = [
             ('works_count:>1000,publication_year:2023', 
              {'works_count': {'$gt': 1000}, 'publication_year': {'$eq': 2023}}),
+            # Note: is_oa maps to open_access.is_oa in the actual MongoDB structure
             ('cited_by_count:>50,is_oa:true', 
-             {'cited_by_count': {'$gt': 50}, 'is_oa': {'$eq': True}})
+             {'cited_by_count': {'$gt': 50}, 'open_access.is_oa': True})
         ]
         
         for filter_param, expected in test_cases:
