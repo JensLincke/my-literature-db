@@ -119,11 +119,14 @@ def parse_filter_expression(filter_expr: str) -> Tuple[str, str, Any]:
     
     Example: "publication_year:>2018" -> ("publication_year", "gt", 2018)
     """
-    # Check for special operations first
-    for op_str, op_name in FILTER_OPERATIONS.items():
+    # Check for special operations first (order matters - check longer operators first)
+    sorted_operations = sorted(FILTER_OPERATIONS.items(), key=lambda x: len(x[0]), reverse=True)
+    
+    for op_str, op_name in sorted_operations:
         if op_str in filter_expr and op_str != ":":  # Special case for colon
             field_name, value = filter_expr.split(op_str, 1)
-            value = unquote(value.replace("+", " "))
+            field_name = field_name.rstrip(':')  # Remove trailing colon from field name
+            value = value.replace("+", " ")
             
             # Handle pipe-delimited values (OR conditions)
             if "|" in value:
@@ -136,7 +139,7 @@ def parse_filter_expression(filter_expr: str) -> Tuple[str, str, Any]:
     # Default case is equality with colon
     if ":" in filter_expr:
         field_name, value = filter_expr.split(":", 1)
-        value = unquote(value.replace("+", " "))
+        value = value.replace("+", " ")
         
         # Handle pipe-delimited values (OR conditions)
         if "|" in value:
@@ -280,6 +283,9 @@ def parse_filter_param(filter_param: Optional[str]) -> Dict:
     """
     if not filter_param:
         return {}
+    
+    # URL decode the entire filter parameter first
+    filter_param = unquote(filter_param)
     
     # Split by comma for multiple filters
     filter_expressions = filter_param.split(",")

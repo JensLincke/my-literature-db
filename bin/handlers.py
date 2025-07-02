@@ -42,6 +42,9 @@ class BaseEntityHandler:
         """Generic method for listing entities with pagination"""
         query = {}
         
+        print(f"Listing entities for {self.entity_name} with filters: {filter_param}, extra_filters: {extra_filters}")
+
+
         # Handle entity-specific name field
         if name:
             name_field = "title" if self.entity_name == "work" else "display_name"
@@ -88,24 +91,41 @@ class BaseEntityHandler:
             
         skip = (page - 1) * per_page
         
+
+
+        print(f"start query query {query} with projection {projection} and sort {sort_list}")
+
+
         # Apply query with sort and projection
         cursor = self.collection.find(query, projection)
         
+        print(f"cursor created: {cursor}")
+
         # Apply sorting
         if sort_list:
             # Convert to MongoDB sort format
             cursor = cursor.sort(sort_list)
         
-        total_count = await self.collection.count_documents(query)
+        # Use estimated count for performance - exact count is very expensive on large collections
+        # For filtered queries, we'll use -1 to indicate "many results"
+        if query:  # If there are filters applied
+            total_count = -1  # Indicate "many results" without expensive counting
+        else:
+            # Only do exact counting for unfiltered queries (which should be fast)
+            total_count = await self.collection.estimated_document_count()
+
         results = await cursor.skip(skip).limit(per_page).to_list(per_page)
-        
+
+        print(f"Retrieved {len(results)} results for {self.entity_name} on page {page} with per_page {per_page}")
+
+
         return {
             "meta": {
                 "count": len(results),
                 "total_count": total_count,
                 "page": page,
                 "per_page": per_page,
-                "total_pages": (total_count + per_page - 1) // per_page
+                "total_pages": (total_count + per_page - 1) // per_page if total_count > 0 else -1
             },
             "results": results
         }

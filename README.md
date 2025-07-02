@@ -69,6 +69,8 @@ curl "http://localhost:9020/works?filter=cited_by_count:>100&sort=cited_by_count
 curl "http://localhost:9020/works?filter=publication_year:>2020,cited_by_count:>10&per_page=20"
 ```
 
+**Note:** For performance reasons, filtered queries return `total_count: -1` instead of an exact count. This avoids expensive counting operations on large datasets.
+
 ### Other Entity Types
 
 The same patterns work for other entity types (authors, institutions, concepts, etc.):
