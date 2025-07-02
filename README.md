@@ -20,6 +20,73 @@ pip install fastapi uvicorn motor pymongo
 ./bin/start.sh
 ```
 
+## Example API Usage
+
+Once the server is running (default on port 9020), you can interact with the API using these examples:
+
+### Get a Work by ID
+
+```bash
+# Get a specific work by its OpenAlex ID
+curl "http://localhost:9020/works/W2741809807"
+
+# Get only specific fields
+curl "http://localhost:9020/works/W2741809807?select=id,title,publication_year,cited_by_count"
+
+# Include related entities (authors, concepts, etc.)
+curl "http://localhost:9020/works/W2741809807?include=authors,concepts"
+```
+
+### Search for Works
+
+```bash
+# Basic search
+curl "http://localhost:9020/works/search?q=machine%20learning"
+
+# Search with pagination
+curl "http://localhost:9020/works/search?q=climate%20change&skip=0&limit=10"
+
+# Search with filters (publication year, citation count, etc.)
+curl "http://localhost:9020/works/search?q=neural%20networks&filter=publication_year:2023,cited_by_count:>50"
+
+# Search with sorting
+curl "http://localhost:9020/works/search?q=artificial%20intelligence&sort=cited_by_count:desc"
+
+# Search with field selection
+curl "http://localhost:9020/works/search?q=deep%20learning&select=id,title,publication_year&limit=5"
+```
+
+### List and Filter Works
+
+```bash
+# List recent works
+curl "http://localhost:9020/works?filter=publication_year:2023&per_page=10"
+
+# Filter by citation count
+curl "http://localhost:9020/works?filter=cited_by_count:>100&sort=cited_by_count:desc"
+
+# Filter with multiple criteria
+curl "http://localhost:9020/works?filter=publication_year:>2020,cited_by_count:>10&per_page=20"
+```
+
+### Other Entity Types
+
+The same patterns work for other entity types (authors, institutions, concepts, etc.):
+
+```bash
+# Get an author by ID
+curl "http://localhost:9020/authors/A5023888391"
+
+# Search for authors
+curl "http://localhost:9020/authors/search?q=John%20Smith"
+
+# Get an institution
+curl "http://localhost:9020/institutions/I27837315"
+
+# Search for concepts
+curl "http://localhost:9020/concepts/search?q=machine%20learning"
+```
+
 ## Architecture
 
 The API follows a modular design pattern:
