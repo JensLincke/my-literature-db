@@ -306,12 +306,14 @@ This will return only the specified fields for the entity."""
 
 def entity_search_description(entity_name: str) -> str:
     """Generate consistent description for entity search endpoints"""
-    search_description = f"Search {entity_name} using MongoDB text search with relevance ranking."
+    search_description = f"Search {entity_name} using full-text search with relevance ranking."
     param_examples = """
 #### Search Parameters
 
-**Filters:** Narrow down search results with filters:
-`/search?q=neural networks&filter=publication_year:>2018,cited_by_count:>100`
+**Note:** Filters are NOT supported in search endpoints. Use the regular list endpoints (e.g., `/works`) for filtering.
+
+**Search Query:** Find entities containing specific terms:
+`/search?q=neural networks`
 
 **Sorting:** Control the order of results (default is by relevance):
 `/search?q=neural networks&sort=cited_by_count:desc`
@@ -320,7 +322,10 @@ def entity_search_description(entity_name: str) -> str:
 `/search?q=neural networks&select=id,title,publication_year,authorships`
 
 **Combined Example:**
-`/search?q=neural networks&filter=publication_year:>2018&sort=cited_by_count:desc&select=id,title,cited_by_count`
+`/search?q=neural networks&sort=cited_by_count:desc&select=id,title,cited_by_count`
+
+**For filtering, use the list endpoint instead:**
+`/works?filter=publication_year:>2018,cited_by_count:>100`
 """
     
     if entity_name in ["works", "authors", "concepts"]:

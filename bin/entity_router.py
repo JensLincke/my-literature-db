@@ -1,7 +1,9 @@
 """
 Entity router factory for the OpenAlex Local API
 
-This module provides a factory function to create FastAPI routers for different entity types
+This module provides a factory function to create FastAPI routers for different en                filter: Optional[str] = Query(None, description="Filter parameter (NOT SUPPORTED in search - returns HTTP 400 error)"),
+                sort: Optional[str] = Query(None, description="Sort parameter (NOT SUPPORTED in search - returns HTTP 400 error)"),
+                select: Optional[str] = Query(None, description="Fields to return")y types
 with standardized CRUD operations.
 """
 
@@ -134,8 +136,8 @@ class EntityRouter:
             )
             async def search_entities(
                 search_params: SearchParams = Depends(),
-                filter: Optional[str] = Query(None, description="OpenAlex-style filter parameter"),
-                sort: Optional[str] = Query(None, description="Sort parameter (defaults to relevance score)"),
+                filter: Optional[str] = Query(None, description="Filter parameter (NOT SUPPORTED in search - returns HTTP 400 error)"),
+                sort: Optional[str] = Query(None, description="Sort parameter (NOT SUPPORTED in search - returns HTTP 400 error)"),
                 select: Optional[str] = Query(None, description="Fields to return")
             ):
                 if self.verbose:
@@ -144,8 +146,21 @@ class EntityRouter:
                     self.logger.debug(f"Search params: q='{search_params.q}', skip={search_params.skip}, limit={search_params.limit}")
                     self.logger.debug(f"Additional params: filter='{filter}', sort='{sort}', select='{select}'")
 
-                # Process filter if provided
-                filter_query = parse_filter_param(filter) if filter else None
+                # Check for unsupported parameters in search mode
+                if filter:
+                    raise HTTPException(
+                        status_code=400, 
+                        detail=f"Filter parameter is not supported in search endpoints. Use /{self.entity_name_plural} endpoint for filtering instead."
+                    )
+                
+                if sort:
+                    raise HTTPException(
+                        status_code=400, 
+                        detail=f"Sort parameter is not supported in search endpoints. Results are ordered by search relevance score."
+                    )
+                
+                # Process filter if provided - but warn user that it will be ignored
+                filter_query = None
                 
                 try:
                     result = await self.handlers[self.entity_type].search_entities(

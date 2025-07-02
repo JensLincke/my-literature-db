@@ -39,18 +39,14 @@ curl "http://localhost:9020/works/W2741809807?include=authors,concepts"
 
 ### Search for Works
 
+**Note**: Search endpoints use Elasticsearch for text search and do not support `filter` or `sort` parameters. These parameters will return HTTP 400 errors if used with search. Use the list endpoints (e.g., `/works`) for filtering and sorting.
+
 ```bash
 # Basic search
 curl "http://localhost:9020/works/search?q=machine%20learning"
 
 # Search with pagination
 curl "http://localhost:9020/works/search?q=climate%20change&skip=0&limit=10"
-
-# Search with filters (publication year, citation count, etc.)
-curl "http://localhost:9020/works/search?q=neural%20networks&filter=publication_year:2023,cited_by_count:>50"
-
-# Search with sorting
-curl "http://localhost:9020/works/search?q=artificial%20intelligence&sort=cited_by_count:desc"
 
 # Search with field selection
 curl "http://localhost:9020/works/search?q=deep%20learning&select=id,title,publication_year&limit=5"
