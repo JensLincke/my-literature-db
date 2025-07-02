@@ -201,11 +201,22 @@ class TestReadmeExamples:
         if data['results']:
             work = data['results'][0]
             self._validate_work_structure(work)
-            # Should have the selected fields
-            for field in ['id', 'title', 'publication_year']:
+            
+            # Check that all selected fields are present (if they exist in the document)
+            selected_fields = {'id', 'title', 'publication_year'}
+            for field in selected_fields:
                 if field in work:  # Field might not exist in the document
                     continue
+            
+            # Check that fields NOT in the select are excluded (except system fields like _id, _score)
+            allowed_fields = selected_fields | {'_id', '_score'}  # System fields that might always be included
+            actual_fields = set(work.keys())
+            unexpected_fields = actual_fields - allowed_fields
+            
+            # Assert that no unexpected fields are present
+            assert len(unexpected_fields) == 0, f"Unexpected fields found: {unexpected_fields}. Should only have: {allowed_fields}"
     
+
     # Test List and Filter Works section
     def test_list_recent_works(self):
         """Test: List recent works"""

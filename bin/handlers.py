@@ -196,6 +196,10 @@ class BaseEntityHandler:
                 # Get the IDs in ranked order from Elasticsearch
                 ids = [doc["id"] for doc in found["results"]]
                 
+                # Handle field selection for Elasticsearch results
+                if select_param:
+                    projection = parse_select_param(select_param)
+                
                 # Get documents from MongoDB while preserving Elasticsearch order
                 mongo_docs = {}
                 async for doc in self.collection.find({"id": {"$in": ids}}, projection):
