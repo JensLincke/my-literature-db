@@ -245,6 +245,20 @@ class TestFilterUtils:
             result = parse_filter_param(filter_param)
             assert result == expected
 
+    def test_parse_filter_param_openalex_ids(self):
+        """Test parsing filter parameters with OpenAlex IDs"""
+        test_cases = [
+            # Short form OpenAlex IDs should be converted to full URLs in the filter query
+            ('ids.openalex:W1491178396', {'ids.openalex': {'$eq': 'https://openalex.org/W1491178396'}}),
+            ('ids.openalex:A5023888391', {'ids.openalex': {'$eq': 'https://openalex.org/A5023888391'}}),
+            ('ids.openalex:C41008148', {'ids.openalex': {'$eq': 'https://openalex.org/C41008148'}}),
+            # Full URLs should pass through unchanged
+            ('ids.openalex:https://openalex.org/W1491178396', {'ids.openalex': {'$eq': 'https://openalex.org/W1491178396'}}),
+        ]
+        
+        for filter_param, expected in test_cases:
+            result = parse_filter_param(filter_param)
+            assert result == expected
 
 class TestFilterOperations:
     """Test the FILTER_OPERATIONS constant and related logic"""
@@ -281,6 +295,40 @@ class TestFilterOperations:
                 assert operation == 'lte'
             elif '!=' in expr:
                 assert operation == 'ne'
+
+
+    def test_build_mongodb_query_openalex_ids(self):
+        """Test building MongoDB queries for OpenAlex ID fields with short and full formats"""
+        test_cases = [
+            # Short form OpenAlex IDs should be converted to full URLs
+            ('ids.openalex', 'eq', 'W1491178396', {'ids.openalex': {'$eq': 'https://openalex.org/W1491178396'}}),
+            ('ids.openalex', 'eq', 'A5023888391', {'ids.openalex': {'$eq': 'https://openalex.org/A5023888391'}}),
+            ('ids.openalex', 'eq', 'C41008148', {'ids.openalex': {'$eq': 'https://openalex.org/C41008148'}}),
+            ('ids.openalex', 'eq', 'I136199984', {'ids.openalex': {'$eq': 'https://openalex.org/I136199984'}}),
+            # Full URLs should pass through unchanged
+            ('ids.openalex', 'eq', 'https://openalex.org/W1491178396', {'ids.openalex': {'$eq': 'https://openalex.org/W1491178396'}}),
+            # Other ID fields should work normally
+            ('ids.doi', 'eq', '10.1000/test', {'ids.doi': {'$eq': '10.1000/test'}}),
+        ]
+        
+        for field, operation, value, expected in test_cases:
+            result = build_mongodb_query(field, operation, value)
+            assert result == expected
+
+    def test_parse_filter_param_openalex_ids(self):
+        """Test parsing filter parameters with OpenAlex IDs"""
+        test_cases = [
+            # Short form OpenAlex IDs should be converted to full URLs in the filter query
+            ('ids.openalex:W1491178396', {'ids.openalex': {'$eq': 'https://openalex.org/W1491178396'}}),
+            ('ids.openalex:A5023888391', {'ids.openalex': {'$eq': 'https://openalex.org/A5023888391'}}),
+            ('ids.openalex:C41008148', {'ids.openalex': {'$eq': 'https://openalex.org/C41008148'}}),
+            # Full URLs should pass through unchanged
+            ('ids.openalex:https://openalex.org/W1491178396', {'ids.openalex': {'$eq': 'https://openalex.org/W1491178396'}}),
+        ]
+        
+        for filter_param, expected in test_cases:
+            result = parse_filter_param(filter_param)
+            assert result == expected
 
 
 if __name__ == '__main__':

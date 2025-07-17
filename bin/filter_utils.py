@@ -266,6 +266,14 @@ def build_mongodb_query(field: str, operation: str, value: Any) -> Dict:
             work_id = value.split("/")[-1] if "/" in value else value
             return {"referenced_works": work_id}
     
+    # Handle OpenAlex ID fields (e.g., ids.openalex, ids.doi, etc.)
+    if field.startswith("ids.") and isinstance(value, str):
+        # Check if the value looks like a short OpenAlex ID (e.g., W1491178396)
+        if field == "ids.openalex" and value.startswith(("W", "A", "C", "I", "S", "T", "F", "P")):
+            # If it's a short ID, convert to the full URL format stored in the database
+            full_url = f"https://openalex.org/{value}"
+            return {field: {mongo_op: full_url}}
+    
     # Handle simple dot notation without special cases
     if "." in field and not field.endswith(".search") and not field.endswith(".equals"):
         # Use regular MongoDB dot notation
