@@ -261,10 +261,20 @@ def build_mongodb_query(field: str, operation: str, value: Any) -> Dict:
     
     # Handle citations (for compatibility with OpenAlex)
     if field == "cites" or field == "cites.id":
-        if isinstance(value, str) and value.startswith("W"):
-            # Extract the work ID if it's in OpenAlex format
-            work_id = value.split("/")[-1] if "/" in value else value
-            return {"referenced_works": work_id}
+        if isinstance(value, str):
+            # Handle both short and full URL formats
+            if value.startswith("https://openalex.org/"):
+                # Already in full URL format
+                target_url = value
+            elif value.startswith(("W", "A", "C", "I", "S", "T", "F", "P")):
+                # Convert short ID to full URL format to match what's stored in referenced_works
+                target_url = f"https://openalex.org/{value}"
+            else:
+                # Fallback - use the value as-is
+                target_url = value
+            
+            # Find works that reference this work (i.e., works that cite it)
+            return {"referenced_works": target_url}
     
     # Handle OpenAlex ID fields (e.g., ids.openalex, ids.doi, etc.)
     if field.startswith("ids.") and isinstance(value, str):

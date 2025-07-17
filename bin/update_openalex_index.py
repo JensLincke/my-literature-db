@@ -385,6 +385,7 @@ def create_indexes(db):
             create_index(collection, [("concepts.id", ASCENDING)])
             create_index(collection, [("ids.doi", ASCENDING)])
             create_index(collection, [("_citation_key", ASCENDING)])
+            create_index(collection, [("referenced_works", ASCENDING)])  # For cites filter queries
             
         elif entity_type == "authors":
             create_index(collection, [("last_known_institution.id", ASCENDING)])

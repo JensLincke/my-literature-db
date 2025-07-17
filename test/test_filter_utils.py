@@ -260,6 +260,35 @@ class TestFilterUtils:
             result = parse_filter_param(filter_param)
             assert result == expected
 
+    def test_build_mongodb_query_cites(self):
+        """Test building MongoDB queries for cites filter"""
+        test_cases = [
+            # Short form work IDs should be converted to full URLs for cites
+            ('cites', 'eq', 'W2115941721', {'referenced_works': 'https://openalex.org/W2115941721'}),
+            ('cites.id', 'eq', 'W1491178396', {'referenced_works': 'https://openalex.org/W1491178396'}),
+            # Full URLs should pass through unchanged
+            ('cites', 'eq', 'https://openalex.org/W2115941721', {'referenced_works': 'https://openalex.org/W2115941721'}),
+            ('cites.id', 'eq', 'https://openalex.org/W1491178396', {'referenced_works': 'https://openalex.org/W1491178396'}),
+        ]
+        
+        for field, operation, value, expected in test_cases:
+            result = build_mongodb_query(field, operation, value)
+            assert result == expected
+
+    def test_parse_filter_param_cites(self):
+        """Test parsing filter parameters with cites"""
+        test_cases = [
+            # Short form work IDs should be converted to full URLs in the cites query
+            ('cites:W2115941721', {'referenced_works': 'https://openalex.org/W2115941721'}),
+            ('cites.id:W1491178396', {'referenced_works': 'https://openalex.org/W1491178396'}),
+            # Full URLs should pass through unchanged
+            ('cites:https://openalex.org/W2115941721', {'referenced_works': 'https://openalex.org/W2115941721'}),
+        ]
+        
+        for filter_param, expected in test_cases:
+            result = parse_filter_param(filter_param)
+            assert result == expected
+
 class TestFilterOperations:
     """Test the FILTER_OPERATIONS constant and related logic"""
     
