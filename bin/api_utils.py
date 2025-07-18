@@ -25,6 +25,7 @@ class PaginationParams:
         ),
         per_page: int = Query(
             25,
+            alias="per-page",
             description="Number of results per page",
             gt=0,
             le=MAX_RESULTS_PER_PAGE,
