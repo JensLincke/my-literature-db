@@ -1,36 +1,40 @@
 #!/usr/bin/env python3
-import asyncio
+import pytest
 import sys
-sys.path.insert(0, '/home/jlincke/lively4/my-literature-db/bin')
+import os
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'bin'))
 
-async def test_single_id():
-    from motor.motor_asyncio import AsyncIOMotorClient
-    from handlers import BaseEntityHandler
-    
-    client = AsyncIOMotorClient('mongodb://localhost:27017')
-    db = client.openalex
-    handler = BaseEntityHandler(db.works, 'work')
-    
-    # Test MAG format specifically
-    test_id = 'mag:1492801337'
-    
-    try:
-        print(f"Testing {test_id}...")
-        work = await handler.get_entity(test_id)
-        title = work.get('title', 'No title')[:50]
-        print(f'✓ {test_id}: Found work "{title}"')
-        
-        # Write result
-        with open('mag_test_result.txt', 'w') as f:
-            f.write(f'SUCCESS: {test_id} -> {title}\n')
-        
-    except Exception as e:
-        print(f'✗ {test_id}: {str(e)}')
-        with open('mag_test_result.txt', 'w') as f:
-            f.write(f'ERROR: {test_id} -> {str(e)}\n')
-    
-    client.close()
-    print("Test completed.")
+from motor.motor_asyncio import AsyncIOMotorClient
+from handlers import BaseEntityHandler
 
-if __name__ == '__main__':
-    asyncio.run(test_single_id())
+class TestMagOnly:
+    """Test MAG format handling"""
+    
+    async def _get_handler(self):
+        """Helper to create handler with fresh connection"""
+        client = AsyncIOMotorClient('mongodb://localhost:27017')
+        db = client.openalex
+        handler = BaseEntityHandler(db.works, 'work')
+        return client, handler
+
+    @pytest.mark.asyncio
+    async def test_single_id(self):
+        client, handler = await self._get_handler()
+        
+        try:
+            # Test MAG format specifically
+            test_id = 'mag:1492801337'
+            
+            print(f"Testing {test_id}...")
+            work = await handler.get_entity(test_id)
+            title = work.get('title', 'No title')[:50]
+            print(f'✓ {test_id}: Found work "{title}"')
+            
+            # Assert for pytest
+            assert work is not None
+            assert 'id' in work
+            assert 'title' in work
+            
+        finally:
+            client.close()
+            print("Test completed.")

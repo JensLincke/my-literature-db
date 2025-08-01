@@ -6,7 +6,7 @@ import sys
 import os
 
 # Add the bin directory to the Python path
-project_root = os.path.dirname(__file__)
+project_root = os.path.dirname(os.path.dirname(__file__))
 bin_path = os.path.join(project_root, 'bin')
 sys.path.insert(0, bin_path)
 

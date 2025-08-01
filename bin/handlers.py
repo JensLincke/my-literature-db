@@ -163,7 +163,7 @@ class BaseEntityHandler:
                 # Search by MAG ID (stored as integer)
                 try:
                     mag_id = int(actual_id)
-                    entity = await self.collection.find_one({"ids.mag": mag_id}, projection)
+                    entity = await self.collection.find_one({"ids.mag": mag_id}, projection, max_time_ms=5000)
                 except ValueError:
                     entity = None
             else:
