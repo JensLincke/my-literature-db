@@ -48,14 +48,16 @@ class TestIDShortcuts:
         """Make a request and return JSON response"""
         url = f"{self.BASE_URL}{path}"
         try:
-            response = requests.get(url, timeout=30)
+            response = requests.get(url, timeout=10)
             assert response.status_code == expected_status, \
                 f"Expected status {expected_status} for {url}, got {response.status_code}. Response: {response.text}"
             return response.json()
         except requests.exceptions.Timeout:
-            pytest.fail(f"Request to {url} timed out")
+            pytest.fail(f"Request to {url} timed out after 10 seconds")
         except json.JSONDecodeError:
             pytest.fail(f"Invalid JSON response from {url}: {response.text}")
+        except requests.exceptions.ConnectionError as e:
+            pytest.skip(f"Could not connect to server at {url}: {e}")
     
     def _validate_work_response(self, work: Dict[str, Any], expected_work_id: str = None):
         """Validate that the response is a valid work with expected properties"""

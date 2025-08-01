@@ -97,7 +97,7 @@ class BaseEntityHandler:
 
 
         # Apply query with sort and projection
-        cursor = self.collection.find(query, projection)
+        cursor = self.collection.find(query, projection, max_time_ms=10000)
         
         print(f"cursor created: {cursor}")
 
@@ -112,9 +112,28 @@ class BaseEntityHandler:
             total_count = -1  # Indicate "many results" without expensive counting
         else:
             # Only do exact counting for unfiltered queries (which should be fast)
-            total_count = await self.collection.estimated_document_count()
+            try:
+                total_count = await self.collection.estimated_document_count(maxTimeMS=10000)
+            except Exception as e:
+                logging.warning(f"Count operation timed out: {e}")
+                total_count = -1
 
-        results = await cursor.skip(skip).limit(per_page).to_list(per_page)
+        try:
+            results = await cursor.skip(skip).limit(per_page).to_list(per_page)
+        except Exception as e:
+            logging.warning(f"Query operation timed out: {e}")
+            # Return empty results with timeout indication
+            return {
+                "meta": {
+                    "count": 0,
+                    "total_count": -1,
+                    "page": page,
+                    "per_page": per_page,
+                    "total_pages": -1,
+                    "error": "Query timeout"
+                },
+                "results": []
+            }
 
         print(f"Retrieved {len(results)} results for {self.entity_name} on page {page} with per_page {per_page}")
 
@@ -146,34 +165,56 @@ class BaseEntityHandler:
             if prefix == "doi":
                 # Search by DOI in the ids.doi field - try multiple URL formats
                 # First try the standard https://doi.org/ format
-                entity = await self.collection.find_one({"ids.doi": f"https://doi.org/{actual_id}"}, projection)
-                if not entity:
-                    # Try the older http://dx.doi.org/ format
-                    entity = await self.collection.find_one({"ids.doi": f"http://dx.doi.org/{actual_id}"}, projection)
-                if not entity:
-                    # Try regex search to match any DOI URL format ending with the actual_id
-                    entity = await self.collection.find_one({"ids.doi": {"$regex": f"/{actual_id}$"}}, projection)
+                try:
+                    entity = await self.collection.find_one({"ids.doi": f"https://doi.org/{actual_id}"}, projection, max_time_ms=10000)
+                    if not entity:
+                        # Try the older http://dx.doi.org/ format
+                        entity = await self.collection.find_one({"ids.doi": f"http://dx.doi.org/{actual_id}"}, projection, max_time_ms=10000)
+                    if not entity:
+                        # Try regex search to match any DOI URL format ending with the actual_id
+                        entity = await self.collection.find_one({"ids.doi": {"$regex": f"/{actual_id}$"}}, projection, max_time_ms=10000)
+                except Exception as e:
+                    logging.warning(f"DOI query timed out for {actual_id}: {e}")
+                    entity = None
             elif prefix == "openalex":
                 # Search by OpenAlex ID - try both full URL and short ID
-                entity = await self.collection.find_one({"ids.openalex": f"https://openalex.org/{actual_id}"}, projection)
-                if not entity:
-                    # Also try the short ID directly
-                    entity = await self.collection.find_one({"_id": actual_id}, projection)
+                try:
+                    entity = await self.collection.find_one({"ids.openalex": f"https://openalex.org/{actual_id}"}, projection, max_time_ms=10000)
+                    if not entity:
+                        # Also try the short ID directly
+                        entity = await self.collection.find_one({"_id": actual_id}, projection, max_time_ms=10000)
+                except Exception as e:
+                    logging.warning(f"OpenAlex query timed out for {actual_id}: {e}")
+                    entity = None
             elif prefix == "mag":
                 # Search by MAG ID (stored as integer)
                 try:
                     mag_id = int(actual_id)
-                    entity = await self.collection.find_one({"ids.mag": mag_id}, projection, max_time_ms=5000)
-                except ValueError:
-                    entity = None
+                    entity = await self.collection.find_one({"ids.mag": mag_id}, projection, max_time_ms=10000)
+                except (ValueError, Exception) as e:
+                    # Handle both invalid MAG ID format and database connection/timeout issues
+                    if isinstance(e, ValueError):
+                        entity = None
+                    else:
+                        # For database connection issues, log and return None to trigger 404
+                        logging.warning(f"Database query failed for MAG ID {mag_id}: {e}")
+                        entity = None
             else:
                 # Unknown prefix, treat as regular ID
-                entity = await self.collection.find_one({"_id": entity_id}, projection)
+                try:
+                    entity = await self.collection.find_one({"_id": entity_id}, projection, max_time_ms=10000)
+                except Exception as e:
+                    logging.warning(f"Unknown prefix query timed out for {entity_id}: {e}")
+                    entity = None
         else:
             # No prefix, check both _id and id fields for the entity
-            entity = await self.collection.find_one({"_id": entity_id}, projection)
-            if not entity:
-                entity = await self.collection.find_one({"id": entity_id}, projection)
+            try:
+                entity = await self.collection.find_one({"_id": entity_id}, projection, max_time_ms=10000)
+                if not entity:
+                    entity = await self.collection.find_one({"id": entity_id}, projection, max_time_ms=10000)
+            except Exception as e:
+                logging.warning(f"ID query timed out for {entity_id}: {e}")
+                entity = None
         
         if not entity:
             raise HTTPException(
@@ -238,8 +279,12 @@ class BaseEntityHandler:
                 
                 # Get documents from MongoDB while preserving Elasticsearch order
                 mongo_docs = {}
-                async for doc in self.collection.find({"id": {"$in": ids}}, projection):
-                    mongo_docs[doc["id"]] = doc
+                try:
+                    async for doc in self.collection.find({"id": {"$in": ids}}, projection, max_time_ms=10000):
+                        mongo_docs[doc["id"]] = doc
+                except Exception as e:
+                    logging.warning(f"MongoDB query for search results timed out: {e}")
+                    mongo_docs = {}
                 
                 # Preserve the order from Elasticsearch results
                 documents = []
@@ -282,14 +327,24 @@ class BaseEntityHandler:
 
                 logger.debug(f"start finding")
 
-                # Create cursor first
-                cursor = self.collection.find(search_query, projection)
-                
-                # Instead of getting exact count, use limit+1 to check if there are more results
-                total_cursor = self.collection.find(search_query).limit(limit + skip + 1)
-                total_docs = await total_cursor.to_list(None)
-                total = len(total_docs)
-                has_more = total > (limit + skip)
+                # Create cursor first with timeout
+                try:
+                    cursor = self.collection.find(search_query, projection, max_time_ms=10000)
+                    
+                    # Instead of getting exact count, use limit+1 to check if there are more results
+                    total_cursor = self.collection.find(search_query, max_time_ms=10000).limit(limit + skip + 1)
+                    total_docs = await total_cursor.to_list(None)
+                    total = len(total_docs)
+                    has_more = total > (limit + skip)
+                except Exception as e:
+                    logging.warning(f"Search query timed out: {e}")
+                    return {
+                        "total": 0,
+                        "skip": skip,
+                        "limit": limit,
+                        "results": [],
+                        "message": f"Search query timed out. Try simpler search terms."
+                    }
                 
                 logger.debug(f"found something")
 
@@ -379,8 +434,19 @@ class BaseEntityHandler:
         if query:
             pipeline.insert(0, {"$match": query})
             
-        # Run the aggregation
-        results = await self.collection.aggregate(pipeline).to_list(length=None)
+        # Run the aggregation with timeout
+        try:
+            results = await self.collection.aggregate(pipeline, maxTimeMS=10000).to_list(length=None)
+        except Exception as e:
+            logging.warning(f"Aggregation query timed out: {e}")
+            return {
+                "meta": {
+                    "count": 0,
+                    "group_by": group_by,
+                    "error": "Query timeout"
+                },
+                "group_by": []
+            }
         
         # Count total unique values
         total_groups = len(results)

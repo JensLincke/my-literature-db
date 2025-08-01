@@ -2,12 +2,30 @@
 import asyncio
 import sys
 import os
+import pytest
 
 # Add the bin directory to the Python path
 sys.path.insert(0, '/home/jlincke/lively4/my-literature-db/bin')
 
 from motor.motor_asyncio import AsyncIOMotorClient
 from handlers import BaseEntityHandler
+
+@pytest.fixture(scope="session", autouse=True)
+async def check_database():
+    """Check if MongoDB is running and has test data before running tests"""
+    try:
+        client = AsyncIOMotorClient('mongodb://localhost:27017', serverSelectionTimeoutMS=2000)
+        db = client.openalex
+        # Try to access the database to check if it's available
+        await client.admin.command('ping')
+        # Check if the works collection exists and has data
+        count = await db.works.count_documents({}, limit=1)
+        if count == 0:
+            pytest.skip("MongoDB works collection is empty - no test data available")
+        client.close()
+        print("MongoDB is available with test data")
+    except Exception as e:
+        pytest.skip(f"MongoDB not available at mongodb://localhost:27017: {e}")
 
 async def test_id_formats():
     client = AsyncIOMotorClient('mongodb://localhost:27017')

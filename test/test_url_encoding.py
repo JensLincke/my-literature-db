@@ -8,6 +8,28 @@ from motor.motor_asyncio import AsyncIOMotorClient
 from handlers import BaseEntityHandler
 import urllib.parse
 
+@pytest.fixture(scope="session", autouse=True)
+def check_database():
+    """Check if MongoDB is running and has test data before running tests"""
+    import asyncio
+    async def _check():
+        try:
+            client = AsyncIOMotorClient('mongodb://localhost:27017', serverSelectionTimeoutMS=2000)
+            db = client.openalex
+            # Try to access the database to check if it's available
+            await client.admin.command('ping')
+            # Check if the works collection exists and has data
+            count = await db.works.count_documents({}, limit=1)
+            if count == 0:
+                pytest.skip("MongoDB works collection is empty - no test data available")
+            client.close()
+            print("MongoDB is available with test data")
+        except Exception as e:
+            pytest.skip(f"MongoDB not available at mongodb://localhost:27017: {e}")
+    
+    # Run the async check
+    asyncio.run(_check())
+
 class TestUrlEncoding:
     """Test URL encoding handling"""
     
