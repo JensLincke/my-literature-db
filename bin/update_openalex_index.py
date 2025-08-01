@@ -384,6 +384,7 @@ def create_indexes(db):
             create_index(collection, [("_author_ids", ASCENDING)])
             create_index(collection, [("concepts.id", ASCENDING)])
             create_index(collection, [("ids.doi", ASCENDING)])
+            create_index(collection, [("ids.mag", ASCENDING)])  # Add MAG ID index for fast lookups
             create_index(collection, [("_citation_key", ASCENDING)])
             create_index(collection, [("referenced_works", ASCENDING)])  # For cites filter queries
             
