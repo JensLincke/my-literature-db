@@ -37,6 +37,32 @@ curl "http://localhost:9020/works/W2741809807?select=id,title,publication_year,c
 curl "http://localhost:9020/works/W2741809807?include=authors,concepts"
 ```
 
+### ID Shortcuts (New Feature!)
+
+You can now query works using different ID formats:
+
+```bash
+# Direct OpenAlex ID
+curl "http://localhost:9020/works/W1492801337"
+
+# OpenAlex prefix format
+curl "http://localhost:9020/works/openalex:W1492801337"
+
+# DOI format (handles slashes automatically)
+curl "http://localhost:9020/works/doi:10.1007/978-3-540-24614-5_17"
+
+# MAG ID format
+curl "http://localhost:9020/works/mag:1492801337"
+```
+
+All ID shortcuts support the same query parameters (`select`, `include`, etc.):
+
+```javascript
+// From JavaScript/browser
+fetch('http://localhost:9020/works/doi:10.1007/978-3-540-24614-5_17?select=id,title,authors')
+fetch('http://localhost:9020/works/openalex:W1492801337?include=authors,concepts')
+```
+
 ### Search for Works
 
 **Note**: Search endpoints use Elasticsearch for text search and do not support `filter` or `sort` parameters. These parameters will return HTTP 400 errors if used with search. Use the list endpoints (e.g., `/works`) for filtering and sorting.
@@ -66,6 +92,42 @@ curl "http://localhost:9020/works?filter=publication_year:>2020,cited_by_count:>
 ```
 
 **Note:** For performance reasons, filtered queries return `total_count: -1` instead of an exact count. This avoids expensive counting operations on large datasets.
+
+## Project Structure
+
+```
+my-literature-db/
+├── bin/                    # Main application code
+│   ├── serve_openalex.py   # FastAPI server entry point
+│   ├── handlers.py         # Database query handlers
+│   ├── entity_router.py    # API route definitions
+│   ├── filter_utils.py     # Query filtering utilities
+│   └── ...                 # Other server modules
+├── test/                   # Unit and integration tests
+│   ├── test_id_shortcuts.py  # Tests for ID shortcut functionality
+│   ├── test_filter_utils.py  # Filter utility tests
+│   └── ...                 # Other test modules
+├── debug/                  # Debug scripts and utilities
+│   ├── debug_doi_encoding.py # DOI encoding debug tests
+│   ├── simple_api_test.py    # Simple API validation
+│   └── ...                 # Other debug utilities
+└── README.md              # This file
+```
+
+## Development
+
+### Running Tests
+
+```bash
+# Run all tests
+pytest test/
+
+# Run specific test file
+pytest test/test_id_shortcuts.py -v
+
+# Run with coverage
+pytest test/ --cov=bin
+```
 
 ### Other Entity Types
 

@@ -135,15 +135,51 @@ class BaseEntityHandler:
         # Handle field selection
         projection = parse_select_param(select_param)
         
-        # Check both _id and id fields for the entity
-        entity = await self.collection.find_one({"_id": entity_id}, projection)
-        if not entity:
-            entity = await self.collection.find_one({"id": entity_id}, projection)
+        # URL decode the entity_id to handle encoded colons (%3A -> :)
+        import urllib.parse
+        entity_id = urllib.parse.unquote(entity_id)
+        
+        # Check if entity_id has a prefix (doi:, openalex:, mag:)
+        if ":" in entity_id:
+            prefix, actual_id = entity_id.split(":", 1)
+            
+            if prefix == "doi":
+                # Search by DOI in the ids.doi field - try multiple URL formats
+                # First try the standard https://doi.org/ format
+                entity = await self.collection.find_one({"ids.doi": f"https://doi.org/{actual_id}"}, projection)
+                if not entity:
+                    # Try the older http://dx.doi.org/ format
+                    entity = await self.collection.find_one({"ids.doi": f"http://dx.doi.org/{actual_id}"}, projection)
+                if not entity:
+                    # Try regex search to match any DOI URL format ending with the actual_id
+                    entity = await self.collection.find_one({"ids.doi": {"$regex": f"/{actual_id}$"}}, projection)
+            elif prefix == "openalex":
+                # Search by OpenAlex ID - try both full URL and short ID
+                entity = await self.collection.find_one({"ids.openalex": f"https://openalex.org/{actual_id}"}, projection)
+                if not entity:
+                    # Also try the short ID directly
+                    entity = await self.collection.find_one({"_id": actual_id}, projection)
+            elif prefix == "mag":
+                # Search by MAG ID (stored as integer)
+                try:
+                    mag_id = int(actual_id)
+                    entity = await self.collection.find_one({"ids.mag": mag_id}, projection)
+                except ValueError:
+                    entity = None
+            else:
+                # Unknown prefix, treat as regular ID
+                entity = await self.collection.find_one({"_id": entity_id}, projection)
+        else:
+            # No prefix, check both _id and id fields for the entity
+            entity = await self.collection.find_one({"_id": entity_id}, projection)
             if not entity:
-                raise HTTPException(
-                    status_code=404, 
-                    detail=f"{self.entity_name} not found"
-                )
+                entity = await self.collection.find_one({"id": entity_id}, projection)
+        
+        if not entity:
+            raise HTTPException(
+                status_code=404, 
+                detail=f"{self.entity_name} not found"
+            )
         return entity
 
 

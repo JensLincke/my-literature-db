@@ -186,7 +186,65 @@ class EntityRouter:
                     self.logger.error(f"Search error: {e}")
                     raise HTTPException(status_code=500, detail=str(e))
 
-        # 3. Get entity by ID endpoint
+        # 3a. Special DOI route that handles slashes in DOI paths
+        @self.router.get(
+            f"/{self.entity_name_plural}/doi:{{doi_path:path}}",
+            summary=f"Get {self.entity_name_singular} by DOI",
+            description=f"Get {self.entity_name_singular} by DOI (handles slashes in DOI path)"
+        )
+        async def get_entity_by_doi(
+            doi_path: str = Path(..., description="The DOI path (everything after 'doi:')"),
+            select: Optional[str] = Query(None, description="Fields to return. Examples: 'id,title,publication_year'"),
+            include: Optional[str] = Query(None, description="Related entities to include. Examples: 'works,authors,concepts'")
+        ):
+            """Get a specific entity by DOI (reconstructs full DOI from path segments)"""
+            # Reconstruct the full DOI ID
+            entity_id = f"doi:{doi_path}"
+            print(f"DEBUG: DOI route - reconstructed entity_id = '{entity_id}' for {self.entity_type}")
+            
+            if self.verbose:
+                start_time = perf_counter()
+                self.logger.debug(f"Getting {self.entity_type} with DOI: {entity_id}")
+            
+            # Parse include parameter
+            include_entities = set(include.split(",")) if include else set()
+            
+            # Get base entity using the same logic as regular route
+            entity_start = perf_counter() if self.verbose else None
+            entity = await self.handlers[self.entity_type].get_entity(entity_id, select)
+            if self.verbose and entity_start is not None:
+                entity_time = perf_counter() - entity_start
+                self.logger.debug(f"Base entity fetch took: {entity_time:.3f}s")
+            
+            # Add related entities (same logic as regular route)
+            if 'works' in self.related_entities and 'works' in include_entities:
+                works_start = perf_counter() if self.verbose else None
+                field_name = f"{self.entity_type[:-1] if self.entity_type.endswith('s') else self.entity_type}_id"
+                
+                filter_field = field_name
+                if self.entity_type == 'authors':
+                    filter_field = "author_ids"
+                elif self.entity_type == 'concepts':
+                    filter_field = "concept_ids"
+                elif self.entity_type == 'institutions':
+                    filter_field = "institution_ids"
+                
+                entity["works"] = await self.db.works.find(
+                    {filter_field: entity_id},
+                    {"id": 1, "title": 1, "publication_year": 1, "cited_by_count": 1, "type": 1}
+                ).sort("cited_by_count", DESCENDING).limit(100).to_list(length=None)
+                
+                if self.verbose and works_start is not None:
+                    works_time = perf_counter() - works_start
+                    self.logger.debug(f"Related works fetch took: {works_time:.3f}s")
+            
+            if self.verbose:
+                total_time = perf_counter() - start_time
+                self.logger.debug(f"Get {self.entity_type} completed in {total_time:.3f}s")
+            
+            return self.jsonable_encoder(entity)
+
+        # 3b. Get entity by ID endpoint (regular cases)
         @self.router.get(
             f"/{self.entity_name_plural}/{{entity_id}}",
             summary=f"Get {self.entity_name_singular} details",
@@ -202,6 +260,9 @@ class EntityRouter:
                 start_time = perf_counter()
                 self.logger.debug(f"Getting {self.entity_type} with ID: {entity_id}")
 
+            # Debug: Log the received entity_id to understand what FastAPI is passing
+            print(f"DEBUG: Received entity_id = '{entity_id}' for {self.entity_type}")
+            
             # Parse include parameter
             include_entities = set(include.split(",")) if include else set()
             
