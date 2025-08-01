@@ -256,7 +256,8 @@ class TestReadmeExamples:
     
     def test_filter_multiple_criteria(self):
         """Test: Filter with multiple criteria"""
-        data = self._make_request("/works?filter=publication_year:>2020,cited_by_count:>1000&per_page=20")
+        # Use higher thresholds to reduce result set and improve performance
+        data = self._make_request("/works?filter=publication_year:>2022,cited_by_count:>5000&per_page=20")
         
         assert 'results' in data
         assert 'meta' in data

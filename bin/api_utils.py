@@ -14,7 +14,7 @@ MAX_RESULTS_PER_PAGE = 100
 
 # Common parameter models
 class PaginationParams:
-    """Common pagination parameters"""
+    """Common pagination parameters that support both per_page and per-page"""
     def __init__(
         self,
         page: int = Query(
@@ -23,17 +23,25 @@ class PaginationParams:
             gt=0,
             example=1
         ),
-        per_page: int = Query(
-            25,
+        per_page: Optional[int] = Query(
+            None,
+            description="Number of results per page (use per_page or per-page)",
+            gt=0,
+            le=MAX_RESULTS_PER_PAGE,
+            example=25
+        ),
+        per_page_alias: Optional[int] = Query(
+            None,
             alias="per-page",
-            description="Number of results per page",
+            description="Number of results per page (alternative format)",
             gt=0,
             le=MAX_RESULTS_PER_PAGE,
             example=25
         ),
     ):
         self.page = page
-        self.per_page = per_page
+        # Use whichever parameter was provided, with per_page taking precedence
+        self.per_page = per_page or per_page_alias or 25
 
 
 class SearchParams:
