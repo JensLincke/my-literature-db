@@ -35,7 +35,7 @@ class TestReadmeExamples:
         url = f"{self.BASE_URL}{path}"
         try:
             response = requests.get(url, timeout=10)
-            assert response.status_code == expected_status, 
+            assert response.status_code == expected_status, \
                 f"Expected status {expected_status} for {url}, got {response.status_code}. Response: {response.text}"
             return response.json()
         except requests.exceptions.Timeout:
