@@ -104,9 +104,15 @@ def parse_filter_value(field_name: str, value: str) -> Any:
             # If conversion fails, return original value
             pass
     
-    # Special case for IDs - might want to extract IDs from OpenAlex URLs
+    # Special case for IDs - expand short OpenAlex IDs to full URLs for better cache performance
     if field_name.endswith(".id") or field_name == "id":
-        # Extract ID from URLs if needed (e.g. https://openalex.org/W12345 -> W12345)
+        # If it's already a full URL, use as-is
+        if value.startswith("https://openalex.org/"):
+            return value
+        # If it looks like a short OpenAlex ID (e.g., A5075469617, W1234567, C123456), expand to full URL
+        if re.match(r'^[AWIVCSFTP]\d+$', value):
+            return f"https://openalex.org/{value}"
+        # If it's a URL from another source, extract the ID part
         if "/" in value:
             return value.split("/")[-1]
     
@@ -199,12 +205,30 @@ def build_mongodb_query(field: str, operation: str, value: Any) -> Dict:
     
     # Handle common OpenAlex patterns
     
+    # Special optimization for author.id queries - use the indexed _author_ids field
+    if field == "author.id":
+        # Extract short ID from full URL if needed
+        author_id = value
+        if isinstance(value, str) and value.startswith("https://openalex.org/"):
+            author_id = value.split("/")[-1]
+        # Use the much faster _author_ids index instead of nested array search
+        return {"_author_ids": {mongo_op: author_id}}
+    
     # Handle authorships fields (e.g., "authorships.author.id")
     if field.startswith("authorships."):
         parts = field.split(".")
         if len(parts) >= 3:
-            # Use the $elemMatch operator for array field matching
-            return {"authorships": {"$elemMatch": {".".join(parts[1:]): {mongo_op: value}}}}
+            # Special optimization for author.id queries - use the indexed _author_ids field
+            if ".".join(parts[1:]) == "author.id":
+                # Extract short ID from full URL if needed
+                author_id = value
+                if isinstance(value, str) and value.startswith("https://openalex.org/"):
+                    author_id = value.split("/")[-1]
+                # Use the much faster _author_ids index instead of nested array search
+                return {"_author_ids": {mongo_op: author_id}}
+            else:
+                # Use the $elemMatch operator for other authorship fields
+                return {"authorships": {"$elemMatch": {".".join(parts[1:]): {mongo_op: value}}}}
     
     # Handle institutions fields
     if field.startswith("institutions."):

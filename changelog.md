@@ -94,6 +94,10 @@
   - Affects all database operations with 10-second timeout limits  
   - Provides proper REST API semantics for client error handling
   - Returns structured error details including timeout duration and error type
+- **Author ID Query Performance**: Optimized `author.id` filters to use indexed `_author_ids` field instead of slow nested array searches
+  - Prevents timeouts when filtering by author IDs (e.g., `filter=author.id:A5075469617`)
+  - Automatically handles both short IDs and full URLs for maximum compatibility
+  - Query time reduced from >10 seconds (timeout) to <1 second
 - DOI URL routing issues with special characters (colons and slashes)
 - Route precedence to ensure existing endpoints (`/works`, `/authors`, etc.) remain unaffected
 
