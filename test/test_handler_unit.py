@@ -125,7 +125,6 @@ class TestHandlerDirectly:
             client.close()
     
     @pytest.mark.asyncio
-    @pytest.mark.skip(reason="MAG index is still building (42.6% complete)")
     async def test_mag_format(self):
         """Test MAG format"""
         client, handler = await self._get_handler()
@@ -172,7 +171,7 @@ class TestHandlerDirectly:
             'doi:10.1007/978-3-540-24614-5_17',
             'doi%3A10.1007/978-3-540-24614-5_17',
             'openalex:W1492801337',
-            # 'mag:1492801337'  # Skip MAG until index build completes (42.6% done)
+            'mag:1492801337'  # Re-enabled - MAG index build completed
         ]
         
         client, handler = await self._get_handler()

@@ -40,7 +40,6 @@ class TestMagOnly:
         return client, handler
 
     @pytest.mark.asyncio
-    @pytest.mark.skip(reason="MAG index is still building (42.6% complete)")
     async def test_single_id(self):
         client, handler = await self._get_handler()
         
