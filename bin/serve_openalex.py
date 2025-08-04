@@ -20,7 +20,7 @@ import base64
 import logging
 import logging.handlers
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Path
 from fastapi.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
 from pymongo import DESCENDING
@@ -129,6 +129,101 @@ async def startup_db_client():
     
     # Register all entity routers
     create_entity_routers(app, db, handlers, jsonable_encoder)
+
+    # Add direct DOI route (needs special handling for slashes)
+    @app.get("/doi:{doi_path:path}",
+             summary="Get entity by DOI",
+             description="Get any entity by its DOI directly from the root URL")
+    async def get_entity_by_direct_doi(
+        doi_path: str = Path(..., description="The DOI path (everything after 'doi:')"),
+        select: Optional[str] = Query(None, description="Fields to return. Examples: 'id,title,publication_year'"),
+        include: Optional[str] = Query(None, description="Related entities to include. Examples: 'works,authors,concepts'")
+    ):
+        """Get any entity by its DOI directly from root URL"""
+        
+        # Reconstruct the full DOI ID
+        entity_id = f"doi:{doi_path}"
+        
+        # DOIs typically map to works, try works first
+        entity_type = 'works'
+        
+        if entity_type not in handlers:
+            raise HTTPException(status_code=404, detail=f"Entity type '{entity_type}' not supported")
+        
+        try:
+            entity = await handlers[entity_type].get_entity(entity_id, select)
+            return jsonable_encoder(entity)
+        except HTTPException:
+            # If works doesn't work, try other entity types
+            for fallback_type in ['authors', 'concepts', 'institutions', 'publishers', 'sources', 'topics', 'fields', 'subfields', 'domains']:
+                try:
+                    entity = await handlers[fallback_type].get_entity(entity_id, select)
+                    return jsonable_encoder(entity)
+                except HTTPException:
+                    continue
+            # If all attempts fail, raise 404
+            raise HTTPException(status_code=404, detail="Entity not found")
+
+    # Add direct ID route (catch-all for OpenAlex IDs at root level)
+    @app.get("/{entity_id}", 
+             summary="Get entity by direct ID",
+             description="Get any entity by its OpenAlex ID or MAG ID directly from the root URL")
+    async def get_entity_by_direct_id(
+        entity_id: str = Path(..., description="OpenAlex ID (W1234...), Author ID (A1234...), MAG ID (mag:1234...), etc."),
+        select: Optional[str] = Query(None, description="Fields to return. Examples: 'id,title,publication_year'"),
+        include: Optional[str] = Query(None, description="Related entities to include. Examples: 'works,authors,concepts'")
+    ):
+        """Get any entity by its ID directly from root URL"""
+        
+        # Determine entity type from ID format
+        entity_type = None
+        
+        if entity_id.startswith('W'):
+            entity_type = 'works'
+        elif entity_id.startswith('A'):
+            entity_type = 'authors'
+        elif entity_id.startswith('C'):
+            entity_type = 'concepts'
+        elif entity_id.startswith('I'):
+            entity_type = 'institutions'
+        elif entity_id.startswith('P'):
+            entity_type = 'publishers'
+        elif entity_id.startswith('S'):
+            entity_type = 'sources'
+        elif entity_id.startswith('T'):
+            entity_type = 'topics'
+        elif entity_id.startswith('F'):
+            entity_type = 'fields'
+        elif entity_id.startswith('SF'):
+            entity_type = 'subfields'
+        elif entity_id.startswith('D'):
+            entity_type = 'domains'
+        elif entity_id.startswith('mag:'):
+            # MAG IDs typically map to works
+            entity_type = 'works'
+        else:
+            # If we can't determine the type, try works first (most common)
+            entity_type = 'works'
+        
+        # Try to get the entity using the determined handler
+        if entity_type not in handlers:
+            raise HTTPException(status_code=404, detail=f"Entity type '{entity_type}' not supported")
+        
+        try:
+            entity = await handlers[entity_type].get_entity(entity_id, select)
+            return jsonable_encoder(entity)
+        except HTTPException:
+            # If it fails and we guessed the type, try other handlers
+            if entity_type == 'works' and not (entity_id.startswith('W') or entity_id.startswith('mag:')):
+                # Try other entity types
+                for fallback_type in ['authors', 'concepts', 'institutions', 'publishers', 'sources', 'topics', 'fields', 'subfields', 'domains']:
+                    try:
+                        entity = await handlers[fallback_type].get_entity(entity_id, select)
+                        return jsonable_encoder(entity)
+                    except HTTPException:
+                        continue
+            # If all attempts fail, re-raise the original exception
+            raise
 
 @app.on_event("shutdown")
 async def shutdown_db_client():
