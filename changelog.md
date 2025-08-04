@@ -1,5 +1,79 @@
 # Changelog
 
+## [Initial Foundation] - Pre-2025-08-04 Baseline
+
+### Core Architecture
+- **FastAPI Server Framework**: Built comprehensive REST API server using FastAPI 1.0.0
+- **MongoDB Integration**: Full MongoDB backend with AsyncIOMotorClient for async database operations
+- **Elasticsearch Integration**: Hybrid search architecture combining MongoDB filtering with Elasticsearch text search
+- **Modular Design**: Clean separation of concerns across ~3,800 lines of production code
+
+### Entity Management System
+- **Multi-Entity Support**: Complete API coverage for 10+ OpenAlex entity types:
+  - Works (research papers, books, etc.)
+  - Authors (researchers, academics)
+  - Concepts (research topics/fields) 
+  - Institutions (universities, companies)
+  - Publishers, Sources, Topics, Fields, Subfields, Domains
+- **EntityRouter Factory**: Standardized route generation with consistent CRUD operations
+- **BaseEntityHandler**: Unified data access layer with query optimization
+
+### API Features
+- **RESTful Endpoints**: Full CRUD operations for all entity types
+- **Advanced Filtering**: OpenAlex-compatible filter syntax with complex query support
+- **Pagination**: Efficient pagination with configurable page sizes (max 100 per page)
+- **Field Selection**: Selective field return with `select` parameter
+- **Related Entity Inclusion**: Deep object expansion with `include` parameter
+- **Sorting**: Multi-field sorting with ascending/descending options
+
+### Search Capabilities
+- **Hybrid Search Architecture**: 
+  - Elasticsearch for full-text search on `/search` endpoints
+  - MongoDB for structured filtering on list endpoints
+- **Search Validation**: Proper error handling preventing filter/sort misuse in search mode
+- **Performance Optimization**: Estimated counts for large datasets to avoid expensive operations
+
+### ID Format Support (Pre-Direct URLs)
+- **Multiple ID Formats**: Support for various identifier schemes:
+  - OpenAlex IDs (`W1234567890`, `A1234567890`, etc.)
+  - DOI handling (`doi:10.1234/example`)
+  - MAG IDs (`mag:1234567890`)
+  - OpenAlex prefix format (`openalex:W1234567890`)
+- **URL-Safe DOI Routing**: Special path handling for DOI slashes in entity routes
+- **ID Normalization**: Automatic conversion between ID formats
+
+### Data Import & Management
+- **OpenAlex Importer**: Complete data pipeline for importing OpenAlex snapshots
+- **Index Management**: MongoDB index optimization and Elasticsearch synchronization
+- **Batch Processing**: Efficient bulk import with progress tracking
+- **Database Utilities**: MongoDB operations and maintenance scripts
+
+### Development Infrastructure
+- **Comprehensive Testing**: pytest-based test suite with asyncio support
+- **Debug Utilities**: Development tools for API validation and troubleshooting
+- **Logging System**: Structured logging with file rotation and multiple levels
+- **Configuration Management**: Environment-based configuration with sensible defaults
+
+### Performance Features
+- **Async Architecture**: Full async/await implementation for high concurrency
+- **Connection Pooling**: Optimized database connection management
+- **Query Optimization**: Efficient MongoDB aggregation pipelines
+- **Caching Strategy**: Performance-focused data access patterns
+
+### Documentation & Examples
+- **Comprehensive README**: Detailed API usage examples and setup instructions
+- **API Documentation**: Auto-generated OpenAPI/Swagger documentation
+- **Example Queries**: Ready-to-use curl examples for all major functionality
+
+### Technical Specifications
+- **Languages**: Python 3.10+ with type hints throughout
+- **Dependencies**: FastAPI, Motor (async MongoDB), Elasticsearch, Pydantic
+- **Database**: MongoDB with optimized indexes
+- **Search**: Elasticsearch integration for text search
+- **Architecture**: Microservice-ready with containerization support
+
+---
+
 ## [2025-08-04] - Direct ID URL Support & Test Suite Cleanup
 
 ### Added
