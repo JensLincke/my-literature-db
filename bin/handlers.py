@@ -122,18 +122,15 @@ class BaseEntityHandler:
             results = await cursor.skip(skip).limit(per_page).to_list(per_page)
         except Exception as e:
             logging.warning(f"Query operation timed out: {e}")
-            # Return empty results with timeout indication
-            return {
-                "meta": {
-                    "count": 0,
-                    "total_count": -1,
-                    "page": page,
-                    "per_page": per_page,
-                    "total_pages": -1,
-                    "error": "Query timeout"
-                },
-                "results": []
-            }
+            # Raise HTTP 408 Request Timeout for query timeouts
+            raise HTTPException(
+                status_code=408, 
+                detail={
+                    "error": "Request timeout",
+                    "message": "Query execution exceeded time limit",
+                    "timeout_seconds": 10
+                }
+            )
 
         print(f"Retrieved {len(results)} results for {self.entity_name} on page {page} with per_page {per_page}")
 
@@ -439,14 +436,15 @@ class BaseEntityHandler:
             results = await self.collection.aggregate(pipeline, maxTimeMS=10000).to_list(length=None)
         except Exception as e:
             logging.warning(f"Aggregation query timed out: {e}")
-            return {
-                "meta": {
-                    "count": 0,
-                    "group_by": group_by,
-                    "error": "Query timeout"
-                },
-                "group_by": []
-            }
+            # Raise HTTP 408 Request Timeout for aggregation timeouts
+            raise HTTPException(
+                status_code=408, 
+                detail={
+                    "error": "Request timeout",
+                    "message": "Aggregation query execution exceeded time limit",
+                    "timeout_seconds": 10
+                }
+            )
         
         # Count total unique values
         total_groups = len(results)

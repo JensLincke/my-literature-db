@@ -90,6 +90,10 @@
 - Comprehensive test suite with 11 test cases covering all direct ID scenarios
 
 ### Fixed
+- **HTTP Status Codes for Timeouts**: Query and aggregation timeouts now return proper HTTP 408 (Request Timeout) instead of HTTP 200 with error message
+  - Affects all database operations with 10-second timeout limits  
+  - Provides proper REST API semantics for client error handling
+  - Returns structured error details including timeout duration and error type
 - DOI URL routing issues with special characters (colons and slashes)
 - Route precedence to ensure existing endpoints (`/works`, `/authors`, etc.) remain unaffected
 
