@@ -22,7 +22,6 @@ def check_server():
     BASE_URL = "http://localhost:9020"
     try:
         response = requests.get(f"{BASE_URL}/", timeout=5)
-        print(f"Server is running (status: {response.status_code})")
     except requests.exceptions.RequestException as e:
         pytest.skip(f"Server not running on {BASE_URL}: {e}")
 
@@ -409,11 +408,4 @@ class TestServerHealth:
                 pytest.fail(f"Timeout for {endpoint}")
 
 if __name__ == '__main__':
-    print("README Integration Tests")
-    print("=" * 40)
-    print("Testing all example API calls from README.md")
-    print("Assumes server is running on http://localhost:9020")
-    print()
-    
-    # Run with pytest
     pytest.main([__file__, '-v'])
